@@ -6,21 +6,38 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+from zoneinfo import ZoneInfo
 
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
-from .config import DEFAULT_SYMBOLS, MAX_EVENTS, MAX_POINTS
+from .config import (
+    DEFAULT_SYMBOLS,
+    INITIAL_CANDLE_LIMIT,
+    INITIAL_HISTORY_POINTS,
+    MAX_EVENTS,
+    MAX_POINTS,
+    NEWS_MAX_ITEMS,
+    NEWS_REFRESH_SECONDS,
+)
 from .feed import BinanceTickerFeed
 from .models import Quote
+from .news import NewsItem, fetch_crypto_news
 
 SPARKS = "▁▂▃▄▅▆▇█"
+FIFTEEN_MIN_MS = 15 * 60 * 1000
+
+try:
+    import plotext as plt
+except Exception:  # pragma: no cover - optional backend
+    plt = None
 
 
 @dataclass(slots=True)
@@ -37,6 +54,50 @@ class SymbolState:
             self.points = deque(maxlen=MAX_POINTS)
 
 
+@dataclass(slots=True)
+class Candle:
+    bucket_ms: int
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+class ChartModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    ChartModal {
+        align: center middle;
+        background: rgba(1, 5, 9, 0.85);
+    }
+    #chart_box {
+        width: 96%;
+        height: 92%;
+        border: round #2ec4b6;
+        background: #060d15;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, symbol: str, chart_builder: Callable[[], Text]) -> None:
+        super().__init__()
+        self.symbol = symbol
+        self.chart_builder = chart_builder
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading chart...", id="chart_box")
+
+    async def on_mount(self) -> None:
+        self._refresh_chart()
+        self.set_interval(1.0, self._refresh_chart)
+
+    def _refresh_chart(self) -> None:
+        self.query_one("#chart_box", Static).update(self.chart_builder())
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key in {"escape", "enter", "q"}:
+            self.dismiss(None)
+
+
 class NeonQuotesApp(App[None]):
     CSS_PATH = "styles.tcss"
     TITLE = "Neon Quotes Terminal"
@@ -45,6 +106,8 @@ class NeonQuotesApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "reset", "Reset"),
+        Binding("n", "refresh_news", "News"),
+        Binding("enter", "open_chart", "Chart"),
         Binding("1", "focus_symbol('BTCUSDT')", "BTC"),
         Binding("2", "focus_symbol('ETHUSDT')", "ETH"),
         Binding("3", "focus_symbol('SOLUSDT')", "SOL"),
@@ -54,9 +117,10 @@ class NeonQuotesApp(App[None]):
     status_text = reactive("CONNECTING")
     ticker_offset = reactive(0)
 
-    def __init__(self, symbols: Iterable[str] | None = None) -> None:
+    def __init__(self, symbols: Iterable[str] | None = None, timezone: str = "") -> None:
         super().__init__()
         self.symbols = list(symbols or DEFAULT_SYMBOLS)
+        self.timezone = timezone.strip()
         self.feed = BinanceTickerFeed(self.symbols)
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.symbols}
         self.feed_task: asyncio.Task[None] | None = None
@@ -64,12 +128,20 @@ class NeonQuotesApp(App[None]):
         self.focused_symbol: str | None = None
         self.row_keys: dict[str, Any] = {}
         self.col_keys: dict[str, Any] = {}
+        self.news_items: list[NewsItem] = []
+        self.news_last_update = "never"
+        self.local_tz = self._resolve_timezone()
+        self.candles: dict[str, deque[Candle]] = {
+            symbol: deque(maxlen=96) for symbol in self.symbols
+        }
 
     def compose(self) -> ComposeResult:
         yield Static(id="header")
         with Horizontal(id="main"):
             yield DataTable(id="quotes")
-            yield RichLog(id="events", highlight=True, wrap=False, markup=True)
+            with Vertical(id="side"):
+                yield RichLog(id="events", highlight=True, wrap=False, markup=True)
+                yield Static(id="news")
         yield Static(id="ticker")
         yield Footer()
 
@@ -96,11 +168,15 @@ class NeonQuotesApp(App[None]):
         events_log = self.query_one("#events", RichLog)
         events_log.max_lines = MAX_EVENTS
         self._log("Booting market stream...")
+        self.query_one("#news", Static).update(Text("Loading crypto news...", style="#7aa3c5"))
 
         self.set_interval(0.5, self._update_clock)
         self.set_interval(1.0, self._animate_ticker)
+        self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
 
+        await self._preload_history()
         self.feed_task = asyncio.create_task(self._consume_feed())
+        self._schedule_news_refresh()
 
     async def on_unmount(self) -> None:
         if self.feed_task:
@@ -113,7 +189,7 @@ class NeonQuotesApp(App[None]):
         age_ms = int(time.time() * 1000) - self.last_tick_ms if self.last_tick_ms else 0
         conn_color = "green" if age_ms < 3000 else "yellow" if age_ms < 10000 else "red"
         pulse = "●" if self.heartbeat else "○"
-        now = datetime.now().strftime("%H:%M:%S")
+        now = datetime.now(self.local_tz).strftime("%H:%M:%S")
         header = (
             f"[bold #00ffae]NEON MARKET TERM[/]  "
             f"[#8ef9f3]{now}[/]  "
@@ -168,6 +244,113 @@ class NeonQuotesApp(App[None]):
                 await asyncio.sleep(2)
                 self.status_text = "STREAMING"
 
+    def _schedule_news_refresh(self) -> None:
+        asyncio.create_task(self._refresh_news())
+
+    def action_refresh_news(self) -> None:
+        self._log("[#2ec4b6]NEWS[/] manual refresh requested")
+        self._schedule_news_refresh()
+
+    def action_open_chart(self) -> None:
+        table = self.query_one("#quotes", DataTable)
+        row = table.cursor_row
+        if row is None:
+            return
+        self._open_chart_for_row(int(row))
+
+    def _open_chart_for_row(self, row_index: int) -> None:
+        row_index = max(0, min(row_index, len(self.symbols) - 1))
+        symbol = self.symbols[row_index]
+        self.push_screen(ChartModal(symbol=symbol, chart_builder=lambda: self._build_chart_text(self.symbol_data[symbol])))
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "quotes":
+            return
+        self._open_chart_for_row(event.cursor_row)
+
+    async def _refresh_news(self) -> None:
+        try:
+            items = await asyncio.to_thread(fetch_crypto_news, NEWS_MAX_ITEMS)
+            self.news_items = items
+            self.news_last_update = datetime.now(self.local_tz).strftime("%H:%M")
+            self._update_news_panel()
+            self._log(f"[#2ec4b6]NEWS[/] refreshed {len(items)} headlines from Finviz")
+        except Exception as exc:
+            self._log(f"[yellow]News warning:[/] {exc!r}")
+
+    async def _preload_history(self) -> None:
+        self._log(f"[#2ec4b6]HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol...")
+        for symbol in self.symbols:
+            try:
+                closes = await asyncio.to_thread(
+                    self.feed.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
+                )
+                candles_raw = await asyncio.to_thread(
+                    self.feed.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
+                )
+                self._seed_symbol_history(symbol, closes, candles_raw)
+            except Exception as exc:
+                self._log(f"[yellow]History warning {symbol}:[/] {exc!r}")
+        self._log("[#2ec4b6]HISTORY[/] preload complete")
+
+    def _seed_symbol_history(
+        self,
+        symbol: str,
+        closes: list[tuple[int, float]],
+        candles_raw: list[tuple[int, float, float, float, float]],
+    ) -> None:
+        state = self.symbol_data[symbol]
+        assert state.points is not None
+        state.points.clear()
+        for _, close_price in closes[-MAX_POINTS:]:
+            state.points.append(close_price)
+        if closes:
+            last_ts, last_close = closes[-1]
+            state.last_update_ms = last_ts
+            state.price = last_close
+
+        series = self.candles[symbol]
+        series.clear()
+        for open_ts, open_p, high_p, low_p, close_p in candles_raw:
+            series.append(
+                Candle(
+                    bucket_ms=open_ts,
+                    open=open_p,
+                    high=high_p,
+                    low=low_p,
+                    close=close_p,
+                )
+            )
+
+        self._refresh_row(state)
+
+    def _resolve_timezone(self) -> ZoneInfo | None:
+        if self.timezone:
+            try:
+                return ZoneInfo(self.timezone)
+            except Exception:
+                pass
+        return datetime.now().astimezone().tzinfo
+
+    def _update_news_panel(self) -> None:
+        panel = Text()
+        panel.append("CRYPTO NEWS // ", style="bold #2ec4b6")
+        panel.append("finviz.com", style="#8ad9ff")
+        panel.append(f" (refresh {NEWS_REFRESH_SECONDS // 60}m)\n", style="#6f8aa8")
+        panel.append(f"Updated {self.news_last_update}\n\n", style="#6f8aa8")
+
+        if not self.news_items:
+            panel.append("No headlines available", style="#7aa3c5")
+        else:
+            for idx, item in enumerate(self.news_items, start=1):
+                panel.append(f"{idx:02d}. ", style="#557799")
+                panel.append(f"[{item.age}] ", style="#ffcf5c")
+                panel.append(item.title[:92], style="#d7f2ff")
+                panel.append("\n")
+                panel.append(f"    {item.source}\n", style="#6f8aa8")
+
+        self.query_one("#news", Static).update(panel)
+
     def _apply_quote(self, quote: Quote) -> None:
         self.last_tick_ms = quote.event_time_ms
         state = self.symbol_data[quote.symbol]
@@ -177,7 +360,20 @@ class NeonQuotesApp(App[None]):
         state.last_update_ms = quote.event_time_ms
         assert state.points is not None
         state.points.append(quote.price)
+        self._update_candles(quote.symbol, quote.price, quote.event_time_ms)
         self._refresh_row(state)
+
+    def _update_candles(self, symbol: str, price: float, event_time_ms: int) -> None:
+        series = self.candles[symbol]
+        bucket = (event_time_ms // FIFTEEN_MIN_MS) * FIFTEEN_MIN_MS
+        if not series or series[-1].bucket_ms != bucket:
+            series.append(Candle(bucket_ms=bucket, open=price, high=price, low=price, close=price))
+            return
+
+        candle = series[-1]
+        candle.high = max(candle.high, price)
+        candle.low = min(candle.low, price)
+        candle.close = price
 
     def _refresh_row(self, state: SymbolState) -> None:
         table = self.query_one("#quotes", DataTable)
@@ -197,15 +393,196 @@ class NeonQuotesApp(App[None]):
     def _sparkline(self, values: deque[float]) -> Text:
         if not values:
             return Text("·", style="#446")
-        lo = min(values)
-        hi = max(values)
+        sampled = self._compress_series(list(values), target=24)
+        lo = min(sampled)
+        hi = max(sampled)
         span = hi - lo or 1.0
         points = []
-        for value in values:
+        for value in sampled:
             idx = int((value - lo) / span * (len(SPARKS) - 1))
             points.append(SPARKS[idx])
-        trend_color = "#00ffae" if values[-1] >= values[0] else "#ff5e7a"
+        trend_color = "#00ffae" if sampled[-1] >= sampled[0] else "#ff5e7a"
         return Text("".join(points), style=trend_color)
+
+    def _build_chart_text(self, state: SymbolState) -> Text:
+        values = list(state.points or [])
+        color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
+        candles = list(self.candles.get(state.symbol, deque()))
+
+        chart = Text()
+        chart.append(f"{state.symbol} // LIVE SNAPSHOT\n", style="bold #99e2ff")
+        chart.append(
+            f"price: {state.price:,.4f}   change: {state.change_percent:+.2f}%   volume: {state.volume:,.2f}\n",
+            style=f"bold {color}",
+        )
+        chart.append("close with [Esc], [Enter] or [q]\n\n", style="#6f8aa8")
+
+        if len(candles) >= 2:
+            chart.append("15m candles\n", style="bold #2ec4b6")
+            chart.append_text(self._render_candlestick_chart(candles, width=96, height=16))
+            chart.append("\n")
+
+        if len(values) >= 2:
+            lo = min(values)
+            hi = max(values)
+            chart.append(
+                f"tick trend min: {lo:,.4f}   max: {hi:,.4f}   points: {len(values)}\n",
+                style="#8ad9ff",
+            )
+            plotext_text = self._render_plotext_xy(values, state.symbol)
+            if plotext_text and plotext_text.count("\n") >= 8:
+                chart.append(plotext_text, style="#d7f2ff")
+            else:
+                chart.append_text(self._render_xy_ascii(values, width=108, height=22, color=color))
+            chart.append("\n")
+        else:
+            chart.append("Waiting for more ticks to draw chart...\n", style="#7aa3c5")
+        return chart
+
+    def _render_plotext_xy(self, values: list[float], symbol: str) -> str:
+        if plt is None:
+            return ""
+        try:
+            series = values[-240:]
+            x = list(range(len(series)))
+            clear_fn = getattr(plt, "clear_figure", None) or getattr(plt, "clf", None)
+            if clear_fn:
+                clear_fn()
+
+            plot_size_fn = getattr(plt, "plot_size", None) or getattr(plt, "plotsize", None)
+            if plot_size_fn:
+                plot_size_fn(120, 28)
+
+            title_fn = getattr(plt, "title", None)
+            if title_fn:
+                title_fn(f"{symbol} XY trend")
+
+            xlabel_fn = getattr(plt, "xlabel", None)
+            if xlabel_fn:
+                xlabel_fn("ticks")
+
+            ylabel_fn = getattr(plt, "ylabel", None)
+            if ylabel_fn:
+                ylabel_fn("price")
+
+            grid_fn = getattr(plt, "grid", None)
+            if grid_fn:
+                try:
+                    grid_fn(True, True)
+                except Exception:
+                    pass
+
+            plot_fn = getattr(plt, "plot", None)
+            if plot_fn:
+                try:
+                    plot_fn(x, series, color="cyan", marker="braille")
+                except Exception:
+                    plot_fn(x, series)
+
+            build_fn = getattr(plt, "build", None)
+            if not build_fn:
+                return ""
+            out = build_fn()
+            if clear_fn:
+                clear_fn()
+            return out if isinstance(out, str) else str(out)
+        except Exception:
+            return ""
+
+    def _render_xy_ascii(self, values: list[float], width: int, height: int, color: str) -> Text:
+        series = values[-max(width * 2, width):]
+        if len(series) > width:
+            step = len(series) / width
+            sampled = [series[int(i * step)] for i in range(width)]
+        else:
+            sampled = series[:]
+            if len(sampled) < width:
+                sampled = [sampled[0]] * (width - len(sampled)) + sampled
+
+        lo = min(sampled)
+        hi = max(sampled)
+        span = hi - lo or 1.0
+
+        def y(value: float) -> int:
+            return int((value - lo) / span * (height - 1))
+
+        grid = [[" " for _ in range(width)] for _ in range(height)]
+
+        # Draw polyline with vertical connectors for continuity.
+        prev_y = y(sampled[0])
+        grid[height - 1 - prev_y][0] = "●"
+        for x in range(1, width):
+            cur_y = y(sampled[x])
+            y0 = min(prev_y, cur_y)
+            y1 = max(prev_y, cur_y)
+            for yy in range(y0, y1 + 1):
+                ch = "●" if yy == cur_y else "│"
+                grid[height - 1 - yy][x] = ch
+            prev_y = cur_y
+
+        text = Text()
+        text.append(f"{hi:,.4f} ┤", style="#8ad9ff")
+        text.append("\n")
+        for row in grid:
+            text.append("      │", style="#284257")
+            text.append("".join(row), style=color)
+            text.append("\n")
+        text.append(f"{lo:,.4f} ┼", style="#8ad9ff")
+        text.append("─" * width, style="#284257")
+        text.append("\n")
+        text.append("       oldest", style="#6f8aa8")
+        text.append(" " * (max(1, width - 13)))
+        text.append("latest", style="#6f8aa8")
+        text.append("\n")
+        return text
+
+    def _compress_series(self, values: list[float], target: int) -> list[float]:
+        if len(values) <= target:
+            return values
+        step = len(values) / target
+        out: list[float] = []
+        for i in range(target):
+            idx = int(i * step)
+            out.append(values[idx])
+        return out
+
+    def _render_candlestick_chart(self, candles: list[Candle], width: int, height: int) -> Text:
+        if len(candles) > width:
+            step = len(candles) / width
+            sampled = [candles[int(i * step)] for i in range(width)]
+        else:
+            sampled = candles
+
+        lo = min(c.low for c in sampled)
+        hi = max(c.high for c in sampled)
+        span = hi - lo or 1.0
+
+        def scale(price: float) -> int:
+            return int((price - lo) / span * (height - 1))
+
+        text = Text()
+        for row in range(height - 1, -1, -1):
+            for candle in sampled:
+                y_low = scale(candle.low)
+                y_high = scale(candle.high)
+                y_open = scale(candle.open)
+                y_close = scale(candle.close)
+                body_min = min(y_open, y_close)
+                body_max = max(y_open, y_close)
+                up = candle.close >= candle.open
+                c_color = "#00ffae" if up else "#ff5e7a"
+
+                if body_min <= row <= body_max:
+                    text.append("█", style=c_color)
+                elif y_low <= row <= y_high:
+                    text.append("│", style=c_color)
+                else:
+                    text.append(" ")
+            text.append("\n")
+
+        text.append(f"high {hi:,.4f}\n", style="#8ad9ff")
+        text.append(f"low  {lo:,.4f}\n", style="#8ad9ff")
+        return text
 
     def _log(self, message: str) -> None:
         self.query_one("#events", RichLog).write(message)
@@ -231,8 +608,8 @@ class NeonQuotesApp(App[None]):
 
     async def on_key(self, event: events.Key) -> None:
         if event.key == "a":
-            self._log("[#ffcf5c]Tip:[/] 1/2/3 focus symbol, r reset, q exit")
+            self._log("[#ffcf5c]Tip:[/] Enter chart, 1/2/3 focus symbol, n refresh news, r reset, q exit")
 
 
-def run_app(symbols: Iterable[str] | None = None) -> None:
-    NeonQuotesApp(symbols=symbols).run()
+def run_app(symbols: Iterable[str] | None = None, timezone: str = "") -> None:
+    NeonQuotesApp(symbols=symbols, timezone=timezone).run()

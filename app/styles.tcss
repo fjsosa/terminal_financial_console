@@ -18,18 +18,32 @@ Screen {
 }
 
 #quotes {
-    width: 2fr;
+    width: 3fr;
     margin: 1 1 1 1;
     border: round #14b8a6;
     background: #060c14;
 }
 
-#events {
-    width: 1fr;
+#side {
+    width: 2fr;
     margin: 1 1 1 0;
+    layout: vertical;
+}
+
+#events {
+    height: 1fr;
+    margin: 0 0 1 0;
     border: round #1d8aff;
     background: #070b12;
     color: #99e2ff;
+}
+
+#news {
+    height: 1fr;
+    border: round #2ec4b6;
+    background: #071019;
+    color: #d7f2ff;
+    padding: 1 1;
 }
 
 #ticker {
@@ -46,4 +60,3 @@ Footer {
     background: #02060a;
     color: #7ad2ff;
 }
-

@@ -1,0 +1,14 @@
+# Neon Quotes configuration
+# Precedence: config.yml < environment variables < CLI arguments
+
+# IANA timezone, e.g. America/Argentina/Buenos_Aires
+timezone: "America/Argentina/Buenos_Aires"
+
+# Symbols to display in watchlist/ticker
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - ADAUSDT
+  - BNBUSDT
+  - PAXGUSDT
