@@ -11,8 +11,8 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 - Ticker tipo zocalo (derecha a izquierda) con crypto + stocks
 - Panel de eventos
 - Panel de noticias multi-feed Finviz (v=3, v=4, v=5, v=6 y tabla News) con refresco cada 10 minutos
-- Descarga de las ultimas 15 noticias por cada feed de Finviz
-- Rotacion automatica de noticias en grupos de 5 cada 10 segundos
+- Descarga de las ultimas 21 noticias por cada feed de Finviz
+- Rotacion automatica de noticias en grupos de 7 cada 10 segundos
 - Precarga historica al inicio (N cotizaciones por simbolo) para graficos completos
 - Modal de arranque con animacion y progreso de carga de historicos
 - Reconexion automatica ante desconexiones

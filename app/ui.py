@@ -311,8 +311,8 @@ class NeonQuotesApp(App[None]):
         news_table.zebra_stripes = True
         n_idx = news_table.add_column("#", width=3)
         n_age = news_table.add_column("Age", width=8)
-        n_title = news_table.add_column("Headline", width=62)
-        n_source = news_table.add_column("Source", width=14)
+        n_title = news_table.add_column("Headline", width=58)
+        n_source = news_table.add_column("Source", width=20)
         self.news_col_keys = {
             "idx": n_idx,
             "age": n_age,
@@ -321,7 +321,14 @@ class NeonQuotesApp(App[None]):
         }
         self.news_row_keys.clear()
         for i in range(NEWS_GROUP_SIZE):
-            row_key = news_table.add_row("-", "-", "Loading headlines...", "-", key=f"news_{i}")
+            row_key = news_table.add_row(
+                "-",
+                "-",
+                "Loading headlines...\nPlease wait",
+                "-",
+                key=f"news_{i}",
+                height=2,
+            )
             self.news_row_keys.append(row_key)
 
         events_log = self.query_one("#events", RichLog)
@@ -408,7 +415,13 @@ class NeonQuotesApp(App[None]):
         width = max(40, self.size.width - 6)
         start = self.ticker_offset % len(scroll)
         visible = (scroll + scroll)[start : start + width]
-        self.query_one("#ticker", Static).update(visible)
+        ticker_text = Text(visible, style="#d7f2ff")
+        for idx, ch in enumerate(visible):
+            if ch == "▲":
+                ticker_text.stylize("#00ffae", idx, idx + 1)
+            elif ch == "▼":
+                ticker_text.stylize("#ff5e7a", idx, idx + 1)
+        self.query_one("#ticker", Static).update(ticker_text)
         self.ticker_offset += 1
 
     async def _consume_feed(self) -> None:
@@ -656,7 +669,9 @@ class NeonQuotesApp(App[None]):
                 row_key = self.news_row_keys[i]
                 table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
                 table.update_cell(row_key, self.news_col_keys["age"], "-")
-                table.update_cell(row_key, self.news_col_keys["title"], "No headlines available")
+                table.update_cell(
+                    row_key, self.news_col_keys["title"], "No headlines available\nTry refresh [n]"
+                )
                 table.update_cell(row_key, self.news_col_keys["source"], "-")
             return
 
@@ -680,13 +695,47 @@ class NeonQuotesApp(App[None]):
                 self.news_row_links[i] = item.url
                 table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
                 table.update_cell(row_key, self.news_col_keys["age"], item.age[:7])
-                table.update_cell(row_key, self.news_col_keys["title"], item.title[:90])
+                table.update_cell(
+                    row_key,
+                    self.news_col_keys["title"],
+                    self._format_headline_two_lines(item.title, line_len=54),
+                )
                 table.update_cell(row_key, self.news_col_keys["source"], item.source[:12])
             else:
                 table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
                 table.update_cell(row_key, self.news_col_keys["age"], "-")
-                table.update_cell(row_key, self.news_col_keys["title"], "")
+                table.update_cell(row_key, self.news_col_keys["title"], "\n")
                 table.update_cell(row_key, self.news_col_keys["source"], "")
+
+    def _format_headline_two_lines(self, title: str, line_len: int = 54) -> str:
+        words = title.split()
+        if not words:
+            return "\n"
+
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= line_len:
+                current = candidate
+                continue
+            lines.append(current or word[:line_len])
+            current = word if len(word) <= line_len else word[:line_len]
+            if len(lines) == 2:
+                break
+
+        if len(lines) < 2 and current:
+            lines.append(current)
+
+        if len(lines) == 1:
+            lines.append("")
+
+        # Truncate to exactly two lines and append ellipsis if needed.
+        rendered = lines[:2]
+        consumed = " ".join(rendered).strip()
+        if len(consumed) < len(title):
+            rendered[1] = (rendered[1][: max(0, line_len - 1)] + "…").strip()
+        return f"{rendered[0]}\n{rendered[1]}"
 
     def _copy_news_link(self, row_index: int) -> None:
         link = self.news_row_links.get(row_index)
