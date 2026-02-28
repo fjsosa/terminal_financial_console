@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import shutil
+import subprocess
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -25,13 +28,15 @@ from .config import (
     INITIAL_HISTORY_POINTS,
     MAX_EVENTS,
     MAX_POINTS,
+    NEWS_GROUP_ROTATE_SECONDS,
+    NEWS_GROUP_SIZE,
     NEWS_MAX_ITEMS,
     NEWS_REFRESH_SECONDS,
     STOCKS_REFRESH_SECONDS,
 )
 from .feed import BinanceTickerFeed
 from .models import Quote
-from .news import NewsItem, fetch_crypto_news
+from .news import NewsItem, fetch_all_news
 from .stocks import StockQuote, fetch_stock_history, fetch_stock_quotes
 
 SPARKS = "▁▂▃▄▅▆▇█"
@@ -234,8 +239,12 @@ class NeonQuotesApp(App[None]):
         self.crypto_col_keys: dict[str, Any] = {}
         self.stock_row_keys: dict[str, Any] = {}
         self.stock_col_keys: dict[str, Any] = {}
-        self.news_items: list[NewsItem] = []
+        self.news_row_keys: list[Any] = []
+        self.news_col_keys: dict[str, Any] = {}
         self.news_last_update = "never"
+        self.news_groups: list[tuple[str, list[NewsItem]]] = []
+        self.news_group_index = 0
+        self.news_row_links: dict[int, str] = {}
         self.stocks_last_update = "never"
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
@@ -255,7 +264,8 @@ class NeonQuotesApp(App[None]):
                 yield DataTable(id="stock_quotes")
             with Vertical(id="side"):
                 yield RichLog(id="events", highlight=True, wrap=False, markup=True)
-                yield Static(id="news")
+                yield Static(id="news_header")
+                yield DataTable(id="news_table")
         yield Static(id="ticker")
         yield Footer()
 
@@ -296,14 +306,35 @@ class NeonQuotesApp(App[None]):
             row_key = stock_table.add_row(symbol, "-", "-", "-", key=symbol)
             self.stock_row_keys[symbol] = row_key
 
+        news_table = self.query_one("#news_table", DataTable)
+        news_table.cursor_type = "row"
+        news_table.zebra_stripes = True
+        n_idx = news_table.add_column("#", width=3)
+        n_age = news_table.add_column("Age", width=8)
+        n_title = news_table.add_column("Headline", width=62)
+        n_source = news_table.add_column("Source", width=14)
+        self.news_col_keys = {
+            "idx": n_idx,
+            "age": n_age,
+            "title": n_title,
+            "source": n_source,
+        }
+        self.news_row_keys.clear()
+        for i in range(NEWS_GROUP_SIZE):
+            row_key = news_table.add_row("-", "-", "Loading headlines...", "-", key=f"news_{i}")
+            self.news_row_keys.append(row_key)
+
         events_log = self.query_one("#events", RichLog)
         events_log.max_lines = MAX_EVENTS
         self._log("Booting market stream...")
-        self.query_one("#news", Static).update(Text("Loading crypto news...", style="#7aa3c5"))
+        self.query_one("#news_header", Static).update(
+            Text("NEWS // finviz.com (refresh 10m)", style="#7aa3c5")
+        )
 
         self.set_interval(0.5, self._update_clock)
         self.set_interval(0.15, self._animate_ticker)
         self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
+        self.set_interval(NEWS_GROUP_ROTATE_SECONDS, self._rotate_news_group)
         self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_stock_refresh)
         self.startup_task = asyncio.create_task(self._startup_sequence())
 
@@ -403,8 +434,14 @@ class NeonQuotesApp(App[None]):
         self._schedule_news_refresh()
 
     def action_open_chart(self) -> None:
+        news_table = self.query_one("#news_table", DataTable)
         stock_table = self.query_one("#stock_quotes", DataTable)
         crypto_table = self.query_one("#crypto_quotes", DataTable)
+        if news_table.has_focus:
+            row = news_table.cursor_row
+            if row is not None:
+                self._copy_news_link(int(row))
+            return
         if stock_table.has_focus:
             row = stock_table.cursor_row
             if row is not None:
@@ -440,16 +477,36 @@ class NeonQuotesApp(App[None]):
             return
         if event.data_table.id == "stock_quotes":
             self._open_stock_chart_for_row(event.cursor_row)
+            return
+        if event.data_table.id == "news_table":
+            self._copy_news_link(event.cursor_row)
 
     async def _refresh_news(self) -> None:
         try:
-            items = await asyncio.to_thread(fetch_crypto_news, NEWS_MAX_ITEMS)
-            self.news_items = items
+            by_category = await asyncio.to_thread(fetch_all_news, NEWS_MAX_ITEMS)
+            self.news_groups = self._build_news_groups(by_category)
             self.news_last_update = datetime.now(self.local_tz).strftime("%H:%M")
+            self.news_group_index = 0
             self._update_news_panel()
-            self._log(f"[#2ec4b6]NEWS[/] refreshed {len(items)} headlines from Finviz")
+            total = sum(len(items) for items in by_category.values())
+            self._log(f"[#2ec4b6]NEWS[/] refreshed {total} headlines across {len(by_category)} feeds")
         except Exception as exc:
             self._log(f"[yellow]News warning:[/] {exc!r}")
+
+    def _build_news_groups(self, by_category: dict[str, list[NewsItem]]) -> list[tuple[str, list[NewsItem]]]:
+        groups: list[tuple[str, list[NewsItem]]] = []
+        for category, items in by_category.items():
+            for i in range(0, len(items), NEWS_GROUP_SIZE):
+                chunk = items[i : i + NEWS_GROUP_SIZE]
+                if chunk:
+                    groups.append((category, chunk))
+        return groups
+
+    def _rotate_news_group(self) -> None:
+        if not self.news_groups:
+            return
+        self.news_group_index = (self.news_group_index + 1) % len(self.news_groups)
+        self._update_news_panel()
 
     async def _preload_history(self) -> None:
         if self.boot_modal:
@@ -589,23 +646,81 @@ class NeonQuotesApp(App[None]):
         return datetime.now().astimezone().tzinfo
 
     def _update_news_panel(self) -> None:
-        panel = Text()
-        panel.append("CRYPTO NEWS // ", style="bold #2ec4b6")
-        panel.append("finviz.com", style="#8ad9ff")
-        panel.append(f" (refresh {NEWS_REFRESH_SECONDS // 60}m)\n", style="#6f8aa8")
-        panel.append(f"Updated {self.news_last_update}\n\n", style="#6f8aa8")
+        header = self.query_one("#news_header", Static)
+        table = self.query_one("#news_table", DataTable)
 
-        if not self.news_items:
-            panel.append("No headlines available", style="#7aa3c5")
+        if not self.news_groups:
+            header.update(Text("NEWS // finviz.com (refresh 10m)", style="#7aa3c5"))
+            self.news_row_links.clear()
+            for i in range(NEWS_GROUP_SIZE):
+                row_key = self.news_row_keys[i]
+                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
+                table.update_cell(row_key, self.news_col_keys["age"], "-")
+                table.update_cell(row_key, self.news_col_keys["title"], "No headlines available")
+                table.update_cell(row_key, self.news_col_keys["source"], "-")
+            return
+
+        category, items = self.news_groups[self.news_group_index]
+        title_style = "#2ec4b6" if "CRYPTO" in category else "#ff9f43" if "STOCK" in category else "#8ad9ff"
+        header_txt = Text()
+        header_txt.append(f"{category} // ", style=f"bold {title_style}")
+        header_txt.append("finviz.com", style="#8ad9ff")
+        header_txt.append(f" (refresh {NEWS_REFRESH_SECONDS // 60}m) ", style="#6f8aa8")
+        header_txt.append(
+            f"[group {self.news_group_index + 1}/{len(self.news_groups)} | updated {self.news_last_update}]",
+            style="#6f8aa8",
+        )
+        header.update(header_txt)
+
+        self.news_row_links.clear()
+        for i in range(NEWS_GROUP_SIZE):
+            row_key = self.news_row_keys[i]
+            if i < len(items):
+                item = items[i]
+                self.news_row_links[i] = item.url
+                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
+                table.update_cell(row_key, self.news_col_keys["age"], item.age[:7])
+                table.update_cell(row_key, self.news_col_keys["title"], item.title[:90])
+                table.update_cell(row_key, self.news_col_keys["source"], item.source[:12])
+            else:
+                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
+                table.update_cell(row_key, self.news_col_keys["age"], "-")
+                table.update_cell(row_key, self.news_col_keys["title"], "")
+                table.update_cell(row_key, self.news_col_keys["source"], "")
+
+    def _copy_news_link(self, row_index: int) -> None:
+        link = self.news_row_links.get(row_index)
+        if not link:
+            self._log("[yellow]NEWS[/] selected row has no link")
+            return
+        if self._copy_to_clipboard(link):
+            self._log(f"[#2ec4b6]NEWS[/] link copied to clipboard: {link}")
         else:
-            for idx, item in enumerate(self.news_items, start=1):
-                panel.append(f"{idx:02d}. ", style="#557799")
-                panel.append(f"[{item.age}] ", style="#ffcf5c")
-                panel.append(item.title[:92], style="#d7f2ff")
-                panel.append("\n")
-                panel.append(f"    {item.source}\n", style="#6f8aa8")
+            self._log(f"[yellow]NEWS[/] could not access clipboard, link: {link}")
 
-        self.query_one("#news", Static).update(panel)
+    def _copy_to_clipboard(self, text: str) -> bool:
+        try:
+            if sys.platform.startswith("darwin") and shutil.which("pbcopy"):
+                subprocess.run(["pbcopy"], input=text, text=True, check=True)
+                return True
+            if sys.platform.startswith("win"):
+                subprocess.run(["clip"], input=text, text=True, check=True, shell=True)
+                return True
+            if shutil.which("clip.exe"):
+                subprocess.run(["clip.exe"], input=text, text=True, check=True)
+                return True
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy"], input=text, text=True, check=True)
+                return True
+            if shutil.which("xclip"):
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
+                return True
+            if shutil.which("xsel"):
+                subprocess.run(["xsel", "--clipboard", "--input"], input=text, text=True, check=True)
+                return True
+        except Exception:
+            return False
+        return False
 
     def _apply_quote(self, quote: Quote) -> None:
         self.last_tick_ms = quote.event_time_ms
@@ -975,7 +1090,7 @@ class NeonQuotesApp(App[None]):
 
     async def on_key(self, event: events.Key) -> None:
         if event.key == "a":
-            self._log("[#ffcf5c]Tip:[/] Enter chart (t toggle 15m/1h), zocalo includes crypto+stocks, 1/2/3 focus crypto, n refresh news, r reset, q exit")
+            self._log("[#ffcf5c]Tip:[/] Enter opens chart on crypto/stocks and copies link on news table; [t] toggles 15m/1h in modal.")
 
 
 def run_app(

@@ -7,23 +7,48 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .config import FINVIZ_CRYPTO_NEWS_URL
+from .config import (
+    FINVIZ_CRYPTO_NEWS_URL,
+    FINVIZ_ECONOMY_NEWS_URL,
+    FINVIZ_GENERAL_NEWS_URL,
+    FINVIZ_STOCKS_NEWS_URL,
+    FINVIZ_TECH_NEWS_URL,
+)
 
-TIME_TOKEN = re.compile(r"^(?:\d+\s+(?:min|mins|minute|minutes|hour|hours|day|days)|[A-Z][a-z]{2}-\d{2})$")
+TIME_TOKEN = re.compile(
+    r"^(?:\d+\s+(?:min|mins|minute|minutes|hour|hours|day|days)|[A-Z][a-z]{2}-\d{2})$"
+)
 
 
 @dataclass(slots=True)
 class NewsItem:
+    category: str
     title: str
     url: str
     source: str
     age: str
 
 
+@dataclass(slots=True)
+class NewsSource:
+    key: str
+    label: str
+    url: str
+
+
+NEWS_SOURCES = [
+    NewsSource(key="crypto", label="CRYPTO NEWS", url=FINVIZ_CRYPTO_NEWS_URL),
+    NewsSource(key="stocks", label="STOCKS NEWS", url=FINVIZ_STOCKS_NEWS_URL),
+    NewsSource(key="economy", label="ECONOMY NEWS", url=FINVIZ_ECONOMY_NEWS_URL),
+    NewsSource(key="tech", label="TECH NEWS", url=FINVIZ_TECH_NEWS_URL),
+    NewsSource(key="news", label="NEWS", url=FINVIZ_GENERAL_NEWS_URL),
+]
+
+
 class _FinvizNewsParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.items: list[NewsItem] = []
+        self.rows: list[tuple[str, str, str]] = []
         self._in_anchor = False
         self._href = ""
         self._anchor_text_parts: list[str] = []
@@ -53,9 +78,12 @@ class _FinvizNewsParser(HTMLParser):
 
         title = unescape(" ".join(self._anchor_text_parts)).strip()
         href = self._href.strip()
+        age = self._pending_age or "now"
+
         self._in_anchor = False
         self._href = ""
         self._anchor_text_parts = []
+        self._pending_age = ""
 
         if not href.startswith("http"):
             return
@@ -67,20 +95,12 @@ class _FinvizNewsParser(HTMLParser):
             return
 
         source = host.replace("www.", "") or "unknown"
-        self.items.append(
-            NewsItem(
-                title=title,
-                url=href,
-                source=source,
-                age=self._pending_age or "now",
-            )
-        )
-        self._pending_age = ""
+        self.rows.append((title, href, source + "|" + age))
 
 
-def fetch_crypto_news(limit: int = 12) -> list[NewsItem]:
+def _fetch_source_news(source: NewsSource, limit: int) -> list[NewsItem]:
     req = Request(
-        FINVIZ_CRYPTO_NEWS_URL,
+        source.url,
         headers={
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -93,7 +113,27 @@ def fetch_crypto_news(limit: int = 12) -> list[NewsItem]:
     parser.feed(html)
 
     dedup: dict[str, NewsItem] = {}
-    for item in parser.items:
-        if item.url not in dedup:
-            dedup[item.url] = item
+    for title, url, payload in parser.rows:
+        if url in dedup:
+            continue
+        source_host, age = payload.split("|", 1)
+        dedup[url] = NewsItem(
+            category=source.label,
+            title=title,
+            url=url,
+            source=source_host,
+            age=age,
+        )
+
     return list(dedup.values())[:limit]
+
+
+def fetch_all_news(limit_per_source: int = 15) -> dict[str, list[NewsItem]]:
+    out: dict[str, list[NewsItem]] = {}
+    for source in NEWS_SOURCES:
+        try:
+            out[source.label] = _fetch_source_news(source, limit_per_source)
+        except Exception:
+            out[source.label] = []
+    return out
+

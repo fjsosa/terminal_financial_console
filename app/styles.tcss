@@ -50,12 +50,21 @@ Screen {
     color: #99e2ff;
 }
 
-#news {
+#news_header {
+    height: 3;
+    border: round #2ec4b6;
+    background: #071019;
+    color: #d7f2ff;
+    content-align: left middle;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+#news_table {
     height: 1fr;
     border: round #2ec4b6;
     background: #071019;
     color: #d7f2ff;
-    padding: 1 1;
 }
 
 #ticker {

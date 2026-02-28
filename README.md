@@ -10,7 +10,9 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 - Tabla separada de acciones via `yfinance` (refresh cada 10 minutos)
 - Ticker tipo zocalo (derecha a izquierda) con crypto + stocks
 - Panel de eventos
-- Panel de noticias crypto (Finviz) con refresco cada 10 minutos
+- Panel de noticias multi-feed Finviz (v=3, v=4, v=5, v=6 y tabla News) con refresco cada 10 minutos
+- Descarga de las ultimas 15 noticias por cada feed de Finviz
+- Rotacion automatica de noticias en grupos de 5 cada 10 segundos
 - Precarga historica al inicio (N cotizaciones por simbolo) para graficos completos
 - Modal de arranque con animacion y progreso de carga de historicos
 - Reconexion automatica ante desconexiones
@@ -90,6 +92,7 @@ NEON_STOCK_SYMBOLS="AAPL,MSFT,NVDA,AMZN" ./run_neon_quotes.sh
 - `r`: resetear buffers locales
 - `n`: refrescar noticias manualmente
 - `Enter`: abrir grafico del activo seleccionado (crypto o stock), con refresco en vivo
+- `Enter` en tabla de noticias: copiar link de la noticia al portapapeles
 - `t` (en modal): alternar timeframe entre 15m y 1h
 - `1`: foco en BTCUSDT
 - `2`: foco en ETHUSDT
