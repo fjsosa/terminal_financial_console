@@ -1,0 +1,49 @@
+Screen {
+    background: #05080d;
+    color: #c7f9ff;
+}
+
+#header {
+    dock: top;
+    height: 3;
+    content-align: center middle;
+    background: #08111d;
+    border: tall #0e3145;
+    text-style: bold;
+}
+
+#main {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#quotes {
+    width: 2fr;
+    margin: 1 1 1 1;
+    border: round #14b8a6;
+    background: #060c14;
+}
+
+#events {
+    width: 1fr;
+    margin: 1 1 1 0;
+    border: round #1d8aff;
+    background: #070b12;
+    color: #99e2ff;
+}
+
+#ticker {
+    dock: bottom;
+    height: 3;
+    content-align: center middle;
+    border: heavy #2ec4b6;
+    background: #08111d;
+    color: #e9feff;
+    text-style: bold;
+}
+
+Footer {
+    background: #02060a;
+    color: #7ad2ff;
+}
+

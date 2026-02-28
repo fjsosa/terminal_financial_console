@@ -1,0 +1,14 @@
+DEFAULT_SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+]
+
+BINANCE_WS_BASE = "wss://stream.binance.com:9443/stream"
+RECONNECT_SECONDS = 2
+MAX_POINTS = 40
+MAX_EVENTS = 300
+
