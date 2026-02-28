@@ -4,11 +4,19 @@
 # IANA timezone, e.g. America/Argentina/Buenos_Aires
 timezone: "America/Argentina/Buenos_Aires"
 
-# Symbols to display in watchlist/ticker
-symbols:
+# Crypto symbols in Binance format
+crypto_symbols:
   - BTCUSDT
   - ETHUSDT
   - SOLUSDT
   - ADAUSDT
   - BNBUSDT
   - PAXGUSDT
+
+# Stock symbols (Yahoo Finance tickers)
+stock_symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL

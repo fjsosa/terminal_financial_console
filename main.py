@@ -18,7 +18,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--symbols",
         nargs="+",
-        help="Symbols list, e.g. BTCUSDT ETHUSDT SOLUSDT",
+        help="Deprecated alias for --crypto-symbols",
+    )
+    parser.add_argument(
+        "--crypto-symbols",
+        nargs="+",
+        help="Crypto symbols list, e.g. BTCUSDT ETHUSDT SOLUSDT",
+    )
+    parser.add_argument(
+        "--stock-symbols",
+        nargs="+",
+        help="Stock symbols list, e.g. AAPL MSFT NVDA",
     )
     parser.add_argument(
         "--tz",
@@ -31,7 +41,12 @@ if __name__ == "__main__":
     args = parse_args()
     settings = load_settings(
         config_path=args.config,
-        cli_symbols=args.symbols,
+        cli_crypto_symbols=args.crypto_symbols or args.symbols,
+        cli_stock_symbols=args.stock_symbols,
         cli_timezone=args.tz,
     )
-    run_app(symbols=settings.symbols, timezone=settings.timezone)
+    run_app(
+        crypto_symbols=settings.crypto_symbols,
+        stock_symbols=settings.stock_symbols,
+        timezone=settings.timezone,
+    )

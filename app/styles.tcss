@@ -17,11 +17,23 @@ Screen {
     layout: horizontal;
 }
 
-#quotes {
+#markets {
     width: 3fr;
     margin: 1 1 1 1;
+    layout: vertical;
+}
+
+#crypto_quotes {
+    height: 2fr;
+    margin: 0 0 1 0;
     border: round #14b8a6;
     background: #060c14;
+}
+
+#stock_quotes {
+    height: 1fr;
+    border: round #ff9f43;
+    background: #0d0b08;
 }
 
 #side {

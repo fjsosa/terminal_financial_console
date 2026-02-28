@@ -1,2 +1,3 @@
 textual>=0.58.0
 websockets>=12.0
+yfinance>=0.2.40

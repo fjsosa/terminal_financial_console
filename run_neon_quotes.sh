@@ -61,7 +61,7 @@ ensure_pip() {
 ensure_pip
 
 has_runtime_deps() {
-  "$VENV_PYTHON" -c "import textual, websockets" >/dev/null 2>&1
+  "$VENV_PYTHON" -c "import textual, websockets, yfinance" >/dev/null 2>&1
 }
 
 echo "Instalando/actualizando dependencias..."

@@ -4,12 +4,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import DEFAULT_SYMBOLS
+from .config import DEFAULT_CRYPTO_SYMBOLS, DEFAULT_STOCK_SYMBOLS
 
 
 @dataclass(slots=True)
 class AppSettings:
-    symbols: list[str]
+    crypto_symbols: list[str]
+    stock_symbols: list[str]
     timezone: str
 
 
@@ -28,8 +29,12 @@ def _load_yaml_config(path: Path) -> dict:
     if not path.exists():
         return {}
     data: dict = {}
-    symbols: list[str] = []
-    in_symbols = False
+    symbols_map = {
+        "symbols": [],
+        "crypto_symbols": [],
+        "stock_symbols": [],
+    }
+    current_list_key = ""
 
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -39,23 +44,32 @@ def _load_yaml_config(path: Path) -> dict:
         if line.startswith("timezone:"):
             value = line.split(":", 1)[1].strip().strip('"').strip("'")
             data["timezone"] = value
-            in_symbols = False
+            current_list_key = ""
             continue
 
         if line.startswith("symbols:"):
-            in_symbols = True
-            data["symbols"] = symbols
+            current_list_key = "symbols"
+            data["symbols"] = symbols_map["symbols"]
             continue
 
-        if in_symbols and line.startswith("-"):
+        if line.startswith("crypto_symbols:"):
+            current_list_key = "crypto_symbols"
+            data["crypto_symbols"] = symbols_map["crypto_symbols"]
+            continue
+
+        if line.startswith("stock_symbols:"):
+            current_list_key = "stock_symbols"
+            data["stock_symbols"] = symbols_map["stock_symbols"]
+            continue
+
+        if current_list_key and line.startswith("-"):
             value = line[1:].strip().strip('"').strip("'")
             if value:
-                symbols.append(value)
+                symbols_map[current_list_key].append(value)
             continue
 
-        # Stop symbol list when another key appears.
         if ":" in line and not line.startswith("-"):
-            in_symbols = False
+            current_list_key = ""
 
     return data
 
@@ -63,36 +77,56 @@ def _load_yaml_config(path: Path) -> dict:
 def load_settings(
     *,
     config_path: str | None,
-    cli_symbols: list[str] | None,
+    cli_crypto_symbols: list[str] | None,
+    cli_stock_symbols: list[str] | None,
     cli_timezone: str | None,
 ) -> AppSettings:
     path = Path(config_path or "config.yml")
     cfg = _load_yaml_config(path)
 
     # 1) base defaults
-    symbols = list(DEFAULT_SYMBOLS)
+    crypto_symbols = list(DEFAULT_CRYPTO_SYMBOLS)
+    stock_symbols = list(DEFAULT_STOCK_SYMBOLS)
     timezone = ""
 
     # 2) config.yml
-    cfg_symbols = _parse_symbols(cfg.get("symbols"))
-    if cfg_symbols:
-        symbols = cfg_symbols
+    cfg_crypto_symbols = _parse_symbols(cfg.get("crypto_symbols") or cfg.get("symbols"))
+    if cfg_crypto_symbols:
+        crypto_symbols = cfg_crypto_symbols
+
+    cfg_stock_symbols = _parse_symbols(cfg.get("stock_symbols"))
+    if cfg_stock_symbols:
+        stock_symbols = cfg_stock_symbols
+
     cfg_tz = str(cfg.get("timezone", "")).strip()
     if cfg_tz:
         timezone = cfg_tz
 
     # 3) environment overrides
-    env_symbols = _parse_symbols(os.getenv("NEON_SYMBOLS"))
-    if env_symbols:
-        symbols = env_symbols
+    env_crypto_symbols = _parse_symbols(
+        os.getenv("NEON_CRYPTO_SYMBOLS") or os.getenv("NEON_SYMBOLS")
+    )
+    if env_crypto_symbols:
+        crypto_symbols = env_crypto_symbols
+
+    env_stock_symbols = _parse_symbols(os.getenv("NEON_STOCK_SYMBOLS"))
+    if env_stock_symbols:
+        stock_symbols = env_stock_symbols
+
     env_tz = (os.getenv("NEON_TZ") or "").strip()
     if env_tz:
         timezone = env_tz
 
     # 4) CLI overrides (highest priority)
-    if cli_symbols:
-        symbols = _parse_symbols(cli_symbols)
+    if cli_crypto_symbols:
+        crypto_symbols = _parse_symbols(cli_crypto_symbols)
+    if cli_stock_symbols:
+        stock_symbols = _parse_symbols(cli_stock_symbols)
     if cli_timezone and cli_timezone.strip():
         timezone = cli_timezone.strip()
 
-    return AppSettings(symbols=symbols, timezone=timezone)
+    return AppSettings(
+        crypto_symbols=crypto_symbols,
+        stock_symbols=stock_symbols,
+        timezone=timezone,
+    )
