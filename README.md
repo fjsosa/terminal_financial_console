@@ -244,6 +244,27 @@ La app usa la cache para render inicial rapido y refresca en segundo plano.
 
 Las teclas `1`, `2`, `3` se pueden reasignar desde `config.yml` en `quick_actions`.
 
+### Command Palette (`Ctrl+P`)
+
+La app hereda la Command Palette nativa de Textual. Funciona como un buscador de comandos con *fuzzy search*:
+
+- Abre con `Ctrl+P`.
+- Escribe parte del comando (no necesita coincidencia exacta del inicio).
+- Navega resultados con `↑/↓`.
+- Ejecuta con `Enter`.
+- Cierra con `Esc`.
+
+Funciones principales disponibles (dependen de la version de Textual y del screen activo):
+
+- Acceso rapido a comandos de sistema de la app.
+- Cambio de tema/paleta visual cuando el comando esta disponible.
+- Descubrimiento de comandos sin memorizar atajos.
+
+Documentacion oficial:
+
+- Guia Command Palette: https://textual.textualize.io/guide/command_palette/
+- API `textual.command`: https://textual.textualize.io/api/command/
+
 Comandos en modo comando:
 
 - `:q` salir
