@@ -129,13 +129,17 @@ class ChartModal(ModalScreen[None]):
     def __init__(
         self,
         symbol: str,
+        symbol_type: str,
         chart_builder: Callable[[str, int], Text],
         ensure_history: Callable[[str, int], Awaitable[None]],
+        navigate_symbol: Callable[[int], tuple[str, str] | None] | None = None,
     ) -> None:
         super().__init__()
         self.symbol = symbol
+        self.symbol_type = symbol_type
         self.chart_builder = chart_builder
         self.ensure_history = ensure_history
+        self.navigate_symbol = navigate_symbol
         self.timeframe = TIMEFRAMES[0]
         self._ensure_task: asyncio.Task[None] | None = None
 
@@ -210,6 +214,22 @@ class ChartModal(ModalScreen[None]):
         if event.key == "end":
             scroller.scroll_end(animate=False)
             event.stop()
+            return
+        if event.key in {"left", "comma"} or event.character in {"<", ","}:
+            if self.navigate_symbol:
+                nxt = self.navigate_symbol(-1)
+                if nxt:
+                    self.symbol, self.symbol_type = nxt
+                    self._schedule_ensure_history()
+                    event.stop()
+            return
+        if event.key in {"right", "full_stop", "period"} or event.character in {">", "."}:
+            if self.navigate_symbol:
+                nxt = self.navigate_symbol(1)
+                if nxt:
+                    self.symbol, self.symbol_type = nxt
+                    self._schedule_ensure_history()
+                    event.stop()
 
     async def on_unmount(self) -> None:
         if self._ensure_task and not self._ensure_task.done():
@@ -408,6 +428,8 @@ class NeonQuotesApp(App[None]):
         self.news_groups: list[tuple[str, list[NewsItem]]] = []
         self.news_group_index = 0
         self.news_row_links: dict[int, str] = {}
+        self.main_rotation_pause_until = 0.0
+        self.news_rotation_pause_until = 0.0
         self.stocks_last_update = "never"
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
@@ -452,7 +474,7 @@ class NeonQuotesApp(App[None]):
         main_table = self.query_one("#crypto_quotes", DataTable)
         main_table.cursor_type = "row"
         main_table.zebra_stripes = True
-        col_symbol = main_table.add_column(tr("Ticker"), width=20)
+        col_symbol = main_table.add_column(tr("Ticker"), width=25)
         col_type = main_table.add_column(tr("Type"), width=4)
         col_price = main_table.add_column(tr("Price"), width=13)
         col_change = main_table.add_column("24h %", width=9)
@@ -476,7 +498,7 @@ class NeonQuotesApp(App[None]):
         alerts_table = self.query_one("#stock_quotes", DataTable)
         alerts_table.cursor_type = "row"
         alerts_table.zebra_stripes = True
-        a_symbol = alerts_table.add_column(tr("Ticker"), width=20)
+        a_symbol = alerts_table.add_column(tr("Ticker"), width=25)
         a_type = alerts_table.add_column(tr("Type"), width=4)
         a_change = alerts_table.add_column("24h %", width=9)
         a_price = alerts_table.add_column(tr("Price"), width=13)
@@ -504,22 +526,19 @@ class NeonQuotesApp(App[None]):
         news_table = self.query_one("#news_table", DataTable)
         news_table.cursor_type = "row"
         news_table.zebra_stripes = True
-        n_idx = news_table.add_column("#", width=3)
-        n_age = news_table.add_column(tr("Age"), width=8)
         n_title = news_table.add_column(tr("Headline"), width=58)
+        n_age = news_table.add_column(tr("Age"), width=8)
         n_source = news_table.add_column(tr("Source"), width=20)
         self.news_col_keys = {
-            "idx": n_idx,
-            "age": n_age,
             "title": n_title,
+            "age": n_age,
             "source": n_source,
         }
         self.news_row_keys.clear()
         for i in range(NEWS_GROUP_SIZE):
             row_key = news_table.add_row(
-                "-",
-                "-",
                 tr("Loading headlines...\nPlease wait"),
+                "-",
                 "-",
                 key=f"news_{i}",
                 height=2,
@@ -751,6 +770,21 @@ class NeonQuotesApp(App[None]):
             self._open_main_chart_for_row(int(row))
 
     def _open_chart_for_symbol(self, symbol: str, symbol_type: str) -> None:
+        current = {"symbol": symbol, "type": symbol_type}
+
+        def chart_builder(tf: str, candles: int) -> Text:
+            return self._build_chart_for_item(current["symbol"], current["type"], tf, candles)
+
+        async def ensure_history(tf: str, candles: int) -> None:
+            await self._ensure_chart_history_for_item(current["symbol"], current["type"], tf, candles)
+
+        def navigate(step: int) -> tuple[str, str] | None:
+            nxt = self._advance_symbol_across_groups(current["symbol"], current["type"], step)
+            if not nxt:
+                return None
+            current["symbol"], current["type"] = nxt
+            return nxt
+
         if symbol_type == "stock":
             if symbol not in self.stock_data:
                 self.stock_data[symbol] = StockState(symbol=symbol)
@@ -760,12 +794,10 @@ class NeonQuotesApp(App[None]):
             self.push_screen(
                 ChartModal(
                     symbol=symbol,
-                    chart_builder=lambda tf, candles: self._build_stock_chart_text(
-                        self.stock_data[symbol], tf, candles
-                    ),
-                    ensure_history=lambda tf, candles: self._ensure_stock_chart_history(
-                        symbol, tf, candles
-                    ),
+                    symbol_type=symbol_type,
+                    chart_builder=chart_builder,
+                    ensure_history=ensure_history,
+                    navigate_symbol=navigate,
                 )
             )
             return
@@ -777,14 +809,67 @@ class NeonQuotesApp(App[None]):
         self.push_screen(
             ChartModal(
                 symbol=symbol,
-                chart_builder=lambda tf, candles: self._build_chart_text(
-                    self.symbol_data[symbol], tf, candles
-                ),
-                ensure_history=lambda tf, candles: self._ensure_crypto_chart_history(
-                    symbol, tf, candles
-                ),
+                symbol_type=symbol_type,
+                chart_builder=chart_builder,
+                ensure_history=ensure_history,
+                navigate_symbol=navigate,
             )
         )
+
+    def _build_chart_for_item(
+        self, symbol: str, symbol_type: str, timeframe: str, target_candles: int
+    ) -> Text:
+        if symbol_type == "stock":
+            state = self.stock_data.get(symbol)
+            if state is None:
+                state = StockState(symbol=symbol)
+                self.stock_data[symbol] = state
+            return self._build_stock_chart_text(state, timeframe, target_candles)
+        state = self.symbol_data.get(symbol)
+        if state is None:
+            state = SymbolState(symbol=symbol)
+            self.symbol_data[symbol] = state
+        return self._build_chart_text(state, timeframe, target_candles)
+
+    async def _ensure_chart_history_for_item(
+        self, symbol: str, symbol_type: str, timeframe: str, target_candles: int
+    ) -> None:
+        if symbol_type == "stock":
+            await self._ensure_stock_chart_history(symbol, timeframe, target_candles)
+            return
+        await self._ensure_crypto_chart_history(symbol, timeframe, target_candles)
+
+    def _flatten_group_items(self) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for _, items in self.main_group_items:
+            for item in items:
+                if item in seen:
+                    continue
+                seen.add(item)
+                out.append(item)
+        return out
+
+    def _advance_symbol_across_groups(
+        self, symbol: str, symbol_type: str, step: int
+    ) -> tuple[str, str] | None:
+        ordered = self._flatten_group_items()
+        if not ordered:
+            return None
+        current = (symbol, symbol_type)
+        try:
+            idx = ordered.index(current)
+        except ValueError:
+            idx = 0
+        nxt = ordered[(idx + step) % len(ordered)]
+
+        for i, (_, items) in enumerate(self.main_group_items):
+            if nxt in items:
+                self.main_group_index = i
+                self._pause_group_rotation("crypto_quotes", 60)
+                self._update_main_group_panel()
+                break
+        return nxt
 
     def _open_main_chart_for_row(self, row_index: int) -> None:
         item = self.main_row_item_by_index.get(row_index)
@@ -834,11 +919,15 @@ class NeonQuotesApp(App[None]):
     def _rotate_news_group(self) -> None:
         if not self.news_groups:
             return
+        if time.time() < self.news_rotation_pause_until:
+            return
         self.news_group_index = (self.news_group_index + 1) % len(self.news_groups)
         self._update_news_panel()
 
     def _rotate_main_group(self) -> None:
         if not self.main_group_items:
+            return
+        if time.time() < self.main_rotation_pause_until:
             return
         self.main_group_index = (self.main_group_index + 1) % len(self.main_group_items)
         self._update_main_group_panel()
@@ -847,6 +936,30 @@ class NeonQuotesApp(App[None]):
         if self.lazy_history_task and not self.lazy_history_task.done():
             self.lazy_history_task.cancel()
         self.lazy_history_task = asyncio.create_task(self._load_remaining_history_in_background())
+
+    def _pause_group_rotation(self, table_id: str, seconds: int = 60) -> None:
+        until = time.time() + seconds
+        if table_id == "crypto_quotes":
+            self.main_rotation_pause_until = until
+            return
+        if table_id == "news_table":
+            self.news_rotation_pause_until = until
+
+    def _cycle_main_group(self, step: int) -> None:
+        if not self.main_group_items:
+            return
+        self.main_group_index = (self.main_group_index + step) % len(self.main_group_items)
+        self._pause_group_rotation("crypto_quotes", 60)
+        self._update_main_group_panel()
+        self._schedule_stock_refresh()
+        asyncio.create_task(self._refresh_crypto_stream_for_visible_group())
+
+    def _cycle_news_group(self, step: int) -> None:
+        if not self.news_groups:
+            return
+        self.news_group_index = (self.news_group_index + step) % len(self.news_groups)
+        self._pause_group_rotation("news_table", 60)
+        self._update_news_panel()
 
     async def _refresh_crypto_stream_for_visible_group(self) -> None:
         desired = [s for s, t in self.main_visible_items if t == "crypto"]
@@ -1378,11 +1491,10 @@ class NeonQuotesApp(App[None]):
             self.news_row_links.clear()
             for i in range(NEWS_GROUP_SIZE):
                 row_key = self.news_row_keys[i]
-                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
-                table.update_cell(row_key, self.news_col_keys["age"], "-")
                 table.update_cell(
                     row_key, self.news_col_keys["title"], tr("No headlines available\nTry refresh [n]")
                 )
+                table.update_cell(row_key, self.news_col_keys["age"], "-")
                 table.update_cell(row_key, self.news_col_keys["source"], "-")
             return
 
@@ -1404,18 +1516,16 @@ class NeonQuotesApp(App[None]):
             if i < len(items):
                 item = items[i]
                 self.news_row_links[i] = item.url
-                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
-                table.update_cell(row_key, self.news_col_keys["age"], item.age[:7])
                 table.update_cell(
                     row_key,
                     self.news_col_keys["title"],
                     self._format_headline_two_lines(item.title, line_len=54),
                 )
+                table.update_cell(row_key, self.news_col_keys["age"], item.age[:7])
                 table.update_cell(row_key, self.news_col_keys["source"], item.source[:12])
             else:
-                table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
-                table.update_cell(row_key, self.news_col_keys["age"], "-")
                 table.update_cell(row_key, self.news_col_keys["title"], "\n")
+                table.update_cell(row_key, self.news_col_keys["age"], "-")
                 table.update_cell(row_key, self.news_col_keys["source"], "")
 
     def _format_headline_two_lines(self, title: str, line_len: int = 54) -> str:
@@ -1515,7 +1625,7 @@ class NeonQuotesApp(App[None]):
         else:
             left = (
                 f": [f2] {tr('Cmd')} | q {tr('quit')} | r {tr('reset')} | "
-                f"n {tr('news')} | [enter] {tr('chart')}"
+                f"n {tr('news')} | [enter] {tr('chart')} | < {tr('previous group')} | > {tr('next group')}"
             )
             right = tr("status: normal")
             right_style = "#00ffae"
@@ -1676,7 +1786,7 @@ class NeonQuotesApp(App[None]):
         name = self.symbol_names.get((symbol, symbol_type), "").strip()
         if not name:
             return symbol
-        return f"{symbol}:{name[:10]}"
+        return f"{symbol}:{name[:15]}"
 
     def _format_volume(self, volume: float, width: int = 17) -> str:
         if abs(volume) >= 100_000_000:
@@ -2022,6 +2132,33 @@ class NeonQuotesApp(App[None]):
                 return
             # While chart modal is open, global shortcuts must not affect the app.
             return
+
+        main_table = self.query_one("#crypto_quotes", DataTable)
+        news_table = self.query_one("#news_table", DataTable)
+
+        if main_table.has_focus:
+            if event.key in {"up", "down", "pageup", "pagedown", "home", "end", "j", "k"}:
+                self._pause_group_rotation("crypto_quotes", 60)
+            if event.key in {"left", "comma"} or event.character in {"<", ","}:
+                self._cycle_main_group(-1)
+                event.stop()
+                return
+            if event.key in {"right", "full_stop", "period"} or event.character in {">", "."}:
+                self._cycle_main_group(1)
+                event.stop()
+                return
+
+        if news_table.has_focus:
+            if event.key in {"up", "down", "pageup", "pagedown", "home", "end", "j", "k"}:
+                self._pause_group_rotation("news_table", 60)
+            if event.key in {"left", "comma"} or event.character in {"<", ","}:
+                self._cycle_news_group(-1)
+                event.stop()
+                return
+            if event.key in {"right", "full_stop", "period"} or event.character in {">", "."}:
+                self._cycle_news_group(1)
+                event.stop()
+                return
 
         if self.command_mode:
             if event.key == "escape":

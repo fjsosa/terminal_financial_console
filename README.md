@@ -6,6 +6,8 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 
 - Interfaz TUI moderna con `Textual`
 - Tabla principal con rotacion automatica de grupos definidos en `config.yml` (mixto crypto/stocks)
+- Pausa inteligente de rotacion (60s) cuando hay actividad del usuario en tabla principal o news
+- Navegacion manual de grupos con `←/→` y `<`/`>` (con wrap ciclico)
 - Tabla de alertas (`ALERTAS`) con top 15 por variacion `24h %` (orden descendente)
 - Cotizaciones crypto en vivo por WebSocket publico de Binance
 - Cotizaciones de acciones via `yfinance` (refresh periodico)
@@ -24,6 +26,7 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
   - Timeframes `15m`, `1h`, `1d`, `1w`, `1mo`
 - Carga dinamica de historicos por timeframe para llenar el viewport del chart
 - Scroll vertical en modal de chart para terminales chicas
+- En modo chart, `←/→` y `<`/`>` navegan al ticker anterior/siguiente (ciclico entre grupos)
 - Lazy loading por grupos visibles y carga de historicos en background
 - Precarga historica optimizada al arranque (grupo visible) y completado on-demand en charts
 - Cache local con TTL en `~/.cache/neon_quotes/` para historicos y nombres
@@ -167,9 +170,13 @@ La app usa la cache para render inicial rapido y refresca en segundo plano.
 - `q`: salir
 - `r`: resetear buffers locales
 - `n`: refrescar noticias manualmente
+- `←` / `→`: grupo anterior/siguiente en tabla principal y tabla news (ciclico)
+- `<` / `>`: grupo anterior/siguiente en tabla principal y tabla news (ciclico)
 - `Enter`: abrir grafico del activo seleccionado (crypto o stock), con refresco en vivo
 - `Enter` en tabla de noticias: copiar link de la noticia al portapapeles
 - `t` (en modal): alternar timeframe entre 15m, 1h, 1d, 1w y 1mo
+- `←` / `→` (en modal chart): ticker anterior/siguiente, atravesando grupos en forma ciclica
+- `<` / `>` (en modal chart): ticker anterior/siguiente, atravesando grupos en forma ciclica
 - `:` entrar a modo comando
 - `Esc` salir de modo comando
 - `1`: foco en BTCUSDT

@@ -38,6 +38,8 @@ _ES_FALLBACK = {
     "ALERTAS": "ALERTAS",
     "group": "grupo",
     "updated": "actualizado",
+    "previous group": "grupo anterior",
+    "next group": "grupo siguiente",
     "STOCKS": "ACCIONES",
     "status: normal": "estado: normal",
     "status: enter command": "estado: ingresar comando",
