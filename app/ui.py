@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from .config import (
     CALENDAR_REFRESH_SECONDS,
     CALENDAR_SOON_HOURS,
     CHART_HISTORY_POINTS,
+    DESCRIPTION_CACHE_TTL_SECONDS,
     DEFAULT_CRYPTO_SYMBOLS,
     DEFAULT_STOCK_SYMBOLS,
     INITIAL_CANDLE_LIMIT,
@@ -46,8 +48,18 @@ from .config import (
     STOCKS_REFRESH_SECONDS,
 )
 from .calendar import CalendarEvent, fetch_calendar_events
-from .cache import load_names_cache, load_symbol_history_cache, save_names_cache, save_symbol_history_cache
-from .cache import append_app_log_line
+from .cache import (
+    append_app_log_line,
+    load_categories_cache,
+    load_descriptions_cache,
+    load_names_cache,
+    save_categories_cache,
+    load_symbol_history_cache,
+    save_descriptions_cache,
+    save_names_cache,
+    save_symbol_history_cache,
+)
+from .descriptions import fetch_symbol_profile
 from .feed import BinanceTickerFeed
 from .i18n import format_time_local, set_language, tr
 from .models import Quote
@@ -586,6 +598,9 @@ class NeonQuotesApp(App[None]):
         self.market_groups = list(groups or [])
         self.indicator_groups = list(indicator_groups or [])
         self.symbol_names = dict(symbol_names or {})
+        self.symbol_descriptions: dict[tuple[str, str], str] = {}
+        self.symbol_categories: dict[tuple[str, str], str] = {}
+        self.description_fetching: set[tuple[str, str]] = set()
         self.quick_actions = {
             "1": "BTCUSDT",
             "2": "ETHUSDT",
@@ -795,6 +810,7 @@ class NeonQuotesApp(App[None]):
         events_log = self.query_one("#events", RichLog)
         events_log.max_lines = MAX_EVENTS
         self._log(tr("Booting market stream..."))
+        self._load_cached_descriptions()
         self._load_cached_symbol_names()
         self._log("[#6f8aa8]NAMES[/] resolving symbol names in background...")
         self.name_resolve_task = asyncio.create_task(self._resolve_names_background())
@@ -883,6 +899,28 @@ class NeonQuotesApp(App[None]):
             return
         self.symbol_names.update(cached)
         self._log(f"[#2ec4b6]NAMES[/] loaded {len(cached)} cached names")
+
+    def _load_cached_descriptions(self) -> None:
+        cached = load_descriptions_cache(DESCRIPTION_CACHE_TTL_SECONDS)
+        if not cached:
+            return
+        added = 0
+        for key, value in cached.items():
+            if key in self.symbol_descriptions:
+                continue
+            self.symbol_descriptions[key] = value
+            added += 1
+        if added:
+            self._log(f"[#2ec4b6]DESC[/] loaded {added} cached descriptions")
+        cached_categories = load_categories_cache(DESCRIPTION_CACHE_TTL_SECONDS)
+        cat_added = 0
+        for key, value in cached_categories.items():
+            if key in self.symbol_categories:
+                continue
+            self.symbol_categories[key] = value
+            cat_added += 1
+        if cat_added:
+            self._log(f"[#2ec4b6]DESC[/] loaded {cat_added} cached categories")
 
     async def _resolve_names_background(self) -> None:
         try:
@@ -1341,6 +1379,7 @@ class NeonQuotesApp(App[None]):
             self._open_main_chart_for_row(int(row))
 
     def _open_chart_for_symbol(self, symbol: str, symbol_type: str) -> None:
+        self._schedule_symbol_description_fetch(symbol, symbol_type)
         current = {"symbol": symbol, "type": symbol_type}
 
         def chart_builder(tf: str, candles: int) -> Text:
@@ -1354,6 +1393,7 @@ class NeonQuotesApp(App[None]):
             if not nxt:
                 return None
             current["symbol"], current["type"] = nxt
+            self._schedule_symbol_description_fetch(current["symbol"], current["type"])
             return nxt
 
         if symbol_type == "stock":
@@ -2817,7 +2857,10 @@ class NeonQuotesApp(App[None]):
 
     def _cmd_edit_symbol(self, tokens: list[str]) -> None:
         if len(tokens) < 3:
-            self._log("[yellow]Usage:[/] :edit <symbol> group=<name> type=<crypto|stock> name=<label>")
+            self._log(
+                "[yellow]Usage:[/] :edit <symbol> group=<name> type=<crypto|stock> "
+                "name=<label>"
+            )
             return
         symbol = tokens[1].strip().upper()
         found = self._find_symbol_entry(symbol)
@@ -3151,6 +3194,9 @@ class NeonQuotesApp(App[None]):
         color = self._trend_color(change_percent >= 0, symbol_type=symbol_type)
         palette = self._ui_palette()
         visible_candles = max(24, target_candles)
+        description = self.symbol_descriptions.get((symbol, symbol_type), "").strip()
+        category = self.symbol_categories.get((symbol, symbol_type), "").strip()
+        loading_description = (symbol, symbol_type) in self.description_fetching
 
         chart = Text()
         if display_name:
@@ -3165,6 +3211,21 @@ class NeonQuotesApp(App[None]):
             f"timeframe: {timeframe.upper()}   toggle: [t] 15m/1h/1d/1w/1mo   close: [Esc]/[Enter]/[q]\n\n",
             style=palette["muted"],
         )
+        chart.append(f"{tr('Category')}: ", style=f"bold {palette['brand']}")
+        chart.append((category or "-") + "\n", style=palette["accent"])
+        chart.append(f"{tr('Description')}: ", style=f"bold {palette['brand']}")
+        if description:
+            lines = textwrap.wrap(description, width=112)
+            if not lines:
+                lines = [description]
+            chart.append(lines[0] + "\n", style=palette["text"])
+            for line in lines[1:]:
+                chart.append(line + "\n", style=palette["text"])
+        elif loading_description:
+            chart.append(f"{tr('loading description...')}\n", style=palette["muted"])
+        else:
+            chart.append(f"{tr('description unavailable')}\n", style=palette["muted"])
+        chart.append("\n")
 
         if len(candles) >= 2:
             chart.append("Chart 1: Candlestick view\n", style=f"bold {palette['ok']}")
@@ -3194,6 +3255,35 @@ class NeonQuotesApp(App[None]):
         else:
             chart.append("Waiting for more ticks to draw chart...\n", style=palette["accent"])
         return chart
+
+    def _schedule_symbol_description_fetch(self, symbol: str, symbol_type: str) -> None:
+        key = (symbol, symbol_type)
+        if self.symbol_descriptions.get(key):
+            return
+        if key in self.description_fetching:
+            return
+        self.description_fetching.add(key)
+        self._spawn_background(self._fetch_symbol_description(symbol, symbol_type))
+
+    async def _fetch_symbol_description(self, symbol: str, symbol_type: str) -> None:
+        key = (symbol, symbol_type)
+        try:
+            description, category = await asyncio.to_thread(fetch_symbol_profile, symbol, symbol_type)
+            description = (description or "").strip()
+            category = (category or "").strip()
+            if not description and not category:
+                return
+            if description:
+                self.symbol_descriptions[key] = description
+            if category:
+                self.symbol_categories[key] = category
+            save_descriptions_cache(self.symbol_descriptions)
+            save_categories_cache(self.symbol_categories)
+            self._log(f"[#2ec4b6]DESC[/] loaded profile for {symbol}")
+        except Exception as exc:
+            self._log(f"[yellow]Description warning {symbol}:[/] {exc!r}")
+        finally:
+            self.description_fetching.discard(key)
 
     def _resample_candles(self, candles: list[Candle], timeframe: str) -> list[Candle]:
         if timeframe == "15m":

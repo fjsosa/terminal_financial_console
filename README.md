@@ -32,6 +32,8 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
   - Velas OHLC
   - Grafico de live updates
   - Timeframes `15m`, `1h`, `1d`, `1w`, `1mo`
+  - Panel de detalle con descripcion del simbolo (empresa o narrativa crypto)
+  - Categoria/sector del simbolo (ej. Tecnologia, Salud, Layer 1, etc.)
 - Carga dinamica de historicos por timeframe para llenar el viewport del chart
 - Scroll vertical en modal de chart para terminales chicas
 - En modo chart, `←/→` y `<`/`>` navegan al ticker anterior/siguiente (ciclico entre grupos)
@@ -237,8 +239,11 @@ Se usa cache local en:
 
 - `~/.cache/neon_quotes/history/` para historicos por simbolo
 - `~/.cache/neon_quotes/names.json` para nombres resueltos
+- `~/.cache/neon_quotes/descriptions.json` para descripciones de simbolos
+- `~/.cache/neon_quotes/categories.json` para categoria/sector de simbolos
 
 La app usa la cache para render inicial rapido y refresca en segundo plano.
+Las descripciones y categorias se descargan bajo demanda al abrir el chart y se guardan solo en cache (no en `config.yml`).
 
 ## Atajos
 

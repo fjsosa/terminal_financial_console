@@ -196,13 +196,12 @@ def resolve_symbol_names(
                 if not name:
                     name = _crypto_base(symbol).title() if symbol_type == "crypto" else symbol
                 resolved_map[(symbol, symbol_type)] = name
-                new_group["symbols"].append(
-                    {
-                        "symbol": symbol,
-                        "type": symbol_type,
-                        "name": name,
-                    }
-                )
+                enriched_item = {
+                    "symbol": symbol,
+                    "type": symbol_type,
+                    "name": name,
+                }
+                new_group["symbols"].append(enriched_item)
             enriched_local.append(new_group)
         return enriched_local
 

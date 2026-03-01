@@ -10,6 +10,8 @@ from typing import Any
 CACHE_DIR = Path.home() / ".cache" / "neon_quotes"
 HISTORY_DIR = CACHE_DIR / "history"
 NAMES_FILE = CACHE_DIR / "names.json"
+DESCRIPTIONS_FILE = CACHE_DIR / "descriptions.json"
+CATEGORIES_FILE = CACHE_DIR / "categories.json"
 APP_LOG_FILE = CACHE_DIR / "app.log"
 APP_LOG_MAX_BYTES = 2 * 1024 * 1024
 APP_LOG_BACKUPS = 3
@@ -96,6 +98,72 @@ def save_names_cache(names: dict[tuple[str, str], str]) -> None:
         "names": payload_names,
     }
     _write_json(NAMES_FILE, payload)
+
+
+def load_descriptions_cache(ttl_seconds: int) -> dict[tuple[str, str], str]:
+    payload = _read_json(DESCRIPTIONS_FILE)
+    if not payload:
+        return {}
+    if (time.time() - int(payload.get("ts", 0))) > ttl_seconds:
+        return {}
+    raw = payload.get("descriptions")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        parts = key.split("|", 1)
+        if len(parts) != 2:
+            continue
+        out[(parts[0], parts[1])] = value
+    return out
+
+
+def save_descriptions_cache(descriptions: dict[tuple[str, str], str]) -> None:
+    payload_values: dict[str, str] = {}
+    for (symbol, symbol_type), text in descriptions.items():
+        if not text:
+            continue
+        payload_values[f"{symbol}|{symbol_type}"] = text
+    payload = {
+        "ts": int(time.time()),
+        "descriptions": payload_values,
+    }
+    _write_json(DESCRIPTIONS_FILE, payload)
+
+
+def load_categories_cache(ttl_seconds: int) -> dict[tuple[str, str], str]:
+    payload = _read_json(CATEGORIES_FILE)
+    if not payload:
+        return {}
+    if (time.time() - int(payload.get("ts", 0))) > ttl_seconds:
+        return {}
+    raw = payload.get("categories")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        parts = key.split("|", 1)
+        if len(parts) != 2:
+            continue
+        out[(parts[0], parts[1])] = value
+    return out
+
+
+def save_categories_cache(categories: dict[tuple[str, str], str]) -> None:
+    payload_values: dict[str, str] = {}
+    for (symbol, symbol_type), text in categories.items():
+        if not text:
+            continue
+        payload_values[f"{symbol}|{symbol_type}"] = text
+    payload = {
+        "ts": int(time.time()),
+        "categories": payload_values,
+    }
+    _write_json(CATEGORIES_FILE, payload)
 
 
 def _rotate_log_files(path: Path, max_bytes: int = APP_LOG_MAX_BYTES, backups: int = APP_LOG_BACKUPS) -> None:
