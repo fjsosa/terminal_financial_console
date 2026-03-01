@@ -56,30 +56,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Con simbolos personalizados:
-
-```bash
-python main.py --crypto-symbols BTCUSDT ETHUSDT SOLUSDT ADAUSDT --stock-symbols AAPL MSFT NVDA
-```
-
-Usando archivo de configuracion:
-
-```bash
-python main.py --config config.yml
-```
-
-Forzar zona horaria por parametro:
-
-```bash
-python main.py --tz America/Argentina/Buenos_Aires
-```
-
-Forzar idioma por parametro:
-
-```bash
-python main.py --lang es
-```
-
 ## Configuracion
 
 El archivo `config.yml` permite definir grupos mixtos (formato recomendado):
@@ -124,20 +100,10 @@ groups:
         name: Apple Inc.
 ```
 
-Orden de prioridad (de menor a mayor):
+Fuente de configuracion:
 
-1. `config.yml`
-2. Variables de entorno (`NEON_TZ`, `NEON_LANG`, `NEON_CRYPTO_SYMBOLS`, `NEON_STOCK_SYMBOLS`)
-3. Parametros CLI (`--tz`, `--lang`, `--crypto-symbols`, `--stock-symbols`)
-
-Ejemplos de variables de entorno:
-
-```bash
-NEON_TZ=America/Argentina/Buenos_Aires ./run_neon_quotes.sh
-NEON_LANG=es ./run_neon_quotes.sh
-NEON_CRYPTO_SYMBOLS="BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT" ./run_neon_quotes.sh
-NEON_STOCK_SYMBOLS="AAPL,MSFT,NVDA,AMZN" ./run_neon_quotes.sh
-```
+- La app toma toda la configuracion desde `config.yml`.
+- No se usan variables de entorno ni parametros CLI para sobrescribir simbolos, timezone o idioma.
 
 ## Resolucion de Nombres de Simbolos
 
@@ -149,7 +115,6 @@ Al iniciar, la app carga nombres desde cache local y luego resuelve en backgroun
 Comportamiento por origen de configuracion:
 
 - Si los simbolos vienen de `config.yml` y falta `name`, la app busca el nombre y actualiza el `config.yml` para reutilizarlo en futuros arranques.
-- Si los simbolos vienen por CLI/env, la app busca y asocia nombres solo en memoria (no modifica archivos).
 
 Si una fuente externa no responde o no encuentra el nombre, la app usa fallback:
 
@@ -168,8 +133,6 @@ La app usa la cache para render inicial rapido y refresca en segundo plano.
 ## Atajos
 
 - `q`: salir
-- `r`: resetear buffers locales
-- `n`: refrescar noticias manualmente
 - `←` / `→`: grupo anterior/siguiente en tabla principal y tabla news (ciclico)
 - `<` / `>`: grupo anterior/siguiente en tabla principal y tabla news (ciclico)
 - `Enter`: abrir grafico del activo seleccionado (crypto o stock), con refresco en vivo
@@ -178,18 +141,20 @@ La app usa la cache para render inicial rapido y refresca en segundo plano.
 - `←` / `→` (en modal chart): ticker anterior/siguiente, atravesando grupos en forma ciclica
 - `<` / `>` (en modal chart): ticker anterior/siguiente, atravesando grupos en forma ciclica
 - `:` entrar a modo comando
+- `F2`: entrar a modo comando
 - `Esc` salir de modo comando
+- `?`: mostrar ayuda rapida en eventos
+- `Ctrl+P` / `⌃P`: abrir command palette de Textual
 - `1`: foco en BTCUSDT
 - `2`: foco en ETHUSDT
 - `3`: foco en SOLUSDT
-- `a`: mostrar ayuda rapida en eventos
 
 Comandos en modo comando:
 
 - `:q` salir
 - `:r` reset
 - `:n` refresh news
-- `:help` ayuda de comandos
+- `:?` ayuda de comandos
 
 
 Opcional (chart XY avanzado):

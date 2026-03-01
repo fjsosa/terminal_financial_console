@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +31,17 @@ def _parse_symbols(raw: str | list[str] | None) -> list[str]:
 def _load_yaml_config(path: Path) -> dict:
     if not path.exists():
         return {}
+    try:
+        import yaml  # type: ignore
+
+        with path.open("r", encoding="utf-8") as fh:
+            payload = yaml.safe_load(fh) or {}
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+
+    # Fallback parser for minimal compatibility if PyYAML is unavailable.
     data: dict = {}
     data["groups"] = []
     current_list_key = ""
@@ -44,9 +53,7 @@ def _load_yaml_config(path: Path) -> dict:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        indent = len(line) - len(line.lstrip(" "))
-
-        if indent == 0 and stripped.startswith("timezone:"):
+        if stripped.startswith("timezone:"):
             value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             data["timezone"] = value
             current_list_key = ""
@@ -54,7 +61,7 @@ def _load_yaml_config(path: Path) -> dict:
             current_symbol_item = None
             continue
 
-        if indent == 0 and stripped.startswith("language:"):
+        if stripped.startswith("language:"):
             value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             data["language"] = value
             current_list_key = ""
@@ -62,53 +69,53 @@ def _load_yaml_config(path: Path) -> dict:
             current_symbol_item = None
             continue
 
-        if indent == 0 and stripped in {"symbols:", "crypto_symbols:", "stock_symbols:"}:
+        if stripped in {"symbols:", "crypto_symbols:", "stock_symbols:"}:
             current_list_key = stripped[:-1]
             data.setdefault(current_list_key, [])
             current_group = None
             current_symbol_item = None
             continue
 
-        if indent == 0 and stripped == "groups:":
+        if stripped == "groups:":
             current_list_key = ""
             current_group = None
             current_symbol_item = None
             continue
 
-        if current_list_key and indent >= 2 and stripped.startswith("-"):
+        if current_list_key and stripped.startswith("-"):
             value = stripped[1:].strip().strip('"').strip("'")
             if value:
                 data[current_list_key].append(value)
             continue
 
-        if indent == 2 and stripped.startswith("- name:"):
+        if stripped.startswith("- name:"):
             name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_group = {"name": name, "symbols": []}
             data["groups"].append(current_group)
             current_symbol_item = None
             continue
 
-        if indent == 4 and stripped == "symbols:":
+        if stripped == "symbols:" and current_group is not None:
             current_symbol_item = None
             continue
 
-        if indent == 6 and stripped.startswith("- symbol:") and current_group is not None:
+        if stripped.startswith("- symbol:") and current_group is not None:
             symbol = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_symbol_item = {"symbol": symbol}
             current_group["symbols"].append(current_symbol_item)
             continue
 
-        if indent == 8 and stripped.startswith("type:") and current_symbol_item is not None:
+        if stripped.startswith("type:") and current_symbol_item is not None:
             symbol_type = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_symbol_item["type"] = symbol_type
             continue
 
-        if indent == 8 and stripped.startswith("name:") and current_symbol_item is not None:
+        if stripped.startswith("name:") and current_symbol_item is not None:
             symbol_name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_symbol_item["name"] = symbol_name
             continue
 
-        if indent == 0 and ":" in stripped and not stripped.startswith("-"):
+        if ":" in stripped and not stripped.startswith("-"):
             current_list_key = ""
 
     if not data["groups"]:
@@ -211,14 +218,8 @@ def _normalize_groups(groups: object) -> list[dict[str, Any]]:
 
 
 def load_settings(
-    *,
-    config_path: str | None,
-    cli_crypto_symbols: list[str] | None,
-    cli_stock_symbols: list[str] | None,
-    cli_timezone: str | None,
-    cli_language: str | None,
 ) -> AppSettings:
-    path = Path(config_path or "config.yml")
+    path = Path("config.yml")
     cfg = _load_yaml_config(path)
 
     # 1) base defaults
@@ -256,39 +257,7 @@ def load_settings(
     if cfg_lang:
         language = cfg_lang
 
-    # 3) environment overrides
-    env_crypto_symbols = _parse_symbols(
-        os.getenv("NEON_CRYPTO_SYMBOLS") or os.getenv("NEON_SYMBOLS")
-    )
-    if env_crypto_symbols:
-        crypto_symbols = env_crypto_symbols
-
-    env_stock_symbols = _parse_symbols(os.getenv("NEON_STOCK_SYMBOLS"))
-    if env_stock_symbols:
-        stock_symbols = env_stock_symbols
-
-    env_tz = (os.getenv("NEON_TZ") or "").strip()
-    if env_tz:
-        timezone = env_tz
-    env_lang = (os.getenv("NEON_LANG") or "").strip().lower()
-    if env_lang:
-        language = env_lang
-
-    # 4) CLI overrides (highest priority)
-    if cli_crypto_symbols:
-        crypto_symbols = _parse_symbols(cli_crypto_symbols)
-    if cli_stock_symbols:
-        stock_symbols = _parse_symbols(cli_stock_symbols)
-    if cli_timezone and cli_timezone.strip():
-        timezone = cli_timezone.strip()
-    if cli_language and cli_language.strip():
-        language = cli_language.strip().lower()
-
-    has_symbol_overrides = bool(
-        cli_crypto_symbols or cli_stock_symbols or env_crypto_symbols or env_stock_symbols
-    )
-    if has_symbol_overrides:
-        groups = []
+    # Configuration source is only config.yml (no env/CLI overrides).
     if not groups:
         if crypto_symbols:
             groups.append(
@@ -312,5 +281,5 @@ def load_settings(
         language=language,
         groups=groups,
         config_path=str(path),
-        symbols_from_config=not has_symbol_overrides,
+        symbols_from_config=True,
     )

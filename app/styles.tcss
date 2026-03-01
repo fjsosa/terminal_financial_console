@@ -65,6 +65,7 @@ Screen {
     border: round #2ec4b6;
     background: #071019;
     color: #d7f2ff;
+    overflow-x: hidden;
 }
 
 #ticker {

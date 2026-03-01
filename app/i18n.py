@@ -17,12 +17,6 @@ _TRANSLATION = gettext.NullTranslations()
 # Fallback dictionary while .mo catalogs are not yet compiled.
 _ES_FALLBACK = {
     "Neon terminal quotes dashboard with real-time stream.": "Panel terminal Neon de cotizaciones en tiempo real.",
-    "Path to YAML config file (default: config.yml)": "Ruta al archivo YAML de configuracion (default: config.yml)",
-    "Deprecated alias for --crypto-symbols": "Alias obsoleto de --crypto-symbols",
-    "Crypto symbols list, e.g. BTCUSDT ETHUSDT SOLUSDT": "Lista de simbolos crypto, ej. BTCUSDT ETHUSDT SOLUSDT",
-    "Stock symbols list, e.g. AAPL MSFT NVDA": "Lista de simbolos de acciones, ej. AAPL MSFT NVDA",
-    "IANA timezone, e.g. America/Argentina/Buenos_Aires": "Zona horaria IANA, ej. America/Argentina/Buenos_Aires",
-    "Language code, e.g. es or en": "Codigo de idioma, ej. es o en",
     "Ticker": "Ticker",
     "Type": "Tipo",
     "Price": "Precio",
