@@ -64,12 +64,19 @@ Forzar zona horaria por parametro:
 python main.py --tz America/Argentina/Buenos_Aires
 ```
 
+Forzar idioma por parametro:
+
+```bash
+python main.py --lang es
+```
+
 ## Configuracion
 
 El archivo `config.yml` permite definir grupos mixtos (formato recomendado):
 
 ```yaml
 timezone: "America/Argentina/Buenos_Aires"
+language: "es"
 groups:
   - name: "Crypto"
     symbols:
@@ -91,19 +98,53 @@ groups:
 
 Tambien se soporta el formato legacy con `crypto_symbols` y `stock_symbols` por compatibilidad.
 
+Opcionalmente cada simbolo puede incluir `name`:
+
+```yaml
+groups:
+  - name: "Crypto"
+    symbols:
+      - symbol: BTCUSDT
+        type: crypto
+        name: Bitcoin
+  - name: "Tecnologia"
+    symbols:
+      - symbol: AAPL
+        type: stock
+        name: Apple Inc.
+```
+
 Orden de prioridad (de menor a mayor):
 
 1. `config.yml`
-2. Variables de entorno (`NEON_TZ`, `NEON_CRYPTO_SYMBOLS`, `NEON_STOCK_SYMBOLS`)
-3. Parametros CLI (`--tz`, `--crypto-symbols`, `--stock-symbols`)
+2. Variables de entorno (`NEON_TZ`, `NEON_LANG`, `NEON_CRYPTO_SYMBOLS`, `NEON_STOCK_SYMBOLS`)
+3. Parametros CLI (`--tz`, `--lang`, `--crypto-symbols`, `--stock-symbols`)
 
 Ejemplos de variables de entorno:
 
 ```bash
 NEON_TZ=America/Argentina/Buenos_Aires ./run_neon_quotes.sh
+NEON_LANG=es ./run_neon_quotes.sh
 NEON_CRYPTO_SYMBOLS="BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT" ./run_neon_quotes.sh
 NEON_STOCK_SYMBOLS="AAPL,MSFT,NVDA,AMZN" ./run_neon_quotes.sh
 ```
+
+## Resolucion de Nombres de Simbolos
+
+Al iniciar, la app intenta resolver el nombre legible de cada ticker:
+
+- `stock`: ejemplo `AAPL -> Apple Inc.`
+- `crypto`: ejemplo `BTCUSDT -> Bitcoin` (toma el activo base del par e ignora el quote)
+
+Comportamiento por origen de configuracion:
+
+- Si los simbolos vienen de `config.yml` y falta `name`, la app busca el nombre y actualiza el `config.yml` para reutilizarlo en futuros arranques.
+- Si los simbolos vienen por CLI/env, la app busca y asocia nombres solo en memoria (no modifica archivos).
+
+Si una fuente externa no responde o no encuentra el nombre, la app usa fallback:
+
+- stocks: el propio ticker
+- crypto: el activo base del par
 
 ## Atajos
 

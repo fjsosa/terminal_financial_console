@@ -36,6 +36,7 @@ from .config import (
     STOCKS_REFRESH_SECONDS,
 )
 from .feed import BinanceTickerFeed
+from .i18n import format_time_local, set_language, tr
 from .models import Quote
 from .news import NewsItem, fetch_all_news
 from .stocks import (
@@ -228,7 +229,7 @@ class BootModal(ModalScreen[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self.phase = "Initializing subsystems"
+        self.phase = tr("Initializing subsystems")
         self.done = 0
         self.total = 1
         self.frame = 0
@@ -255,7 +256,7 @@ class BootModal(ModalScreen[None]):
 
     def complete(self) -> None:
         self.done = self.total
-        self.phase = "Market core online"
+        self.phase = tr("Market core online")
         self.active = False
         self._draw()
 
@@ -270,9 +271,9 @@ class BootModal(ModalScreen[None]):
         bar_width = 40
         filled = int((self.done / self.total) * bar_width)
         bar = f"[{'#' * filled}{'.' * (bar_width - filled)}]"
-        status = "RUNNING" if self.active else "READY"
+        status = tr("RUNNING") if self.active else tr("READY")
         txt = Text()
-        txt.append("NEON MARKET OS // BOOT SEQUENCE\n", style="bold #99e2ff")
+        txt.append(f"{tr('NEON MARKET OS // BOOT SEQUENCE')}\n", style="bold #99e2ff")
         txt.append("────────────────────────────────────────────\n", style="#284257")
         txt.append(f"{spinner[self.frame % len(spinner)]} ", style="#ffcf5c")
         txt.append(f"{self.phase}\n", style="#d7f2ff")
@@ -281,8 +282,8 @@ class BootModal(ModalScreen[None]):
         txt.append(bar + "\n\n", style="#2ec4b6")
         txt.append("telemetry stream: ", style="#6f8aa8")
         txt.append(pulse + "\n", style="#00ffae")
-        txt.append("loading historical candles and trend buffers...\n", style="#6f8aa8")
-        txt.append("booting market interfaces [crypto, stocks, news]\n", style="#6f8aa8")
+        txt.append(f"{tr('loading historical candles and trend buffers...')}\n", style="#6f8aa8")
+        txt.append(f"{tr('booting market interfaces [crypto, stocks, news]')}\n", style="#6f8aa8")
         self.query_one("#boot_box", Static).update(txt)
 
 
@@ -364,13 +365,20 @@ class NeonQuotesApp(App[None]):
         crypto_symbols: Iterable[str] | None = None,
         stock_symbols: Iterable[str] | None = None,
         timezone: str = "",
+        language: str = "es",
         groups: Iterable[dict[str, Any]] | None = None,
+        symbol_names: dict[tuple[str, str], str] | None = None,
+        startup_logs: Iterable[str] | None = None,
     ) -> None:
         super().__init__()
         self.crypto_symbols = list(crypto_symbols or DEFAULT_CRYPTO_SYMBOLS)
         self.stock_symbols = [symbol.upper() for symbol in (stock_symbols or DEFAULT_STOCK_SYMBOLS)]
         self.market_groups = list(groups or [])
+        self.symbol_names = dict(symbol_names or {})
+        self.startup_logs = list(startup_logs or [])
         self.timezone = timezone.strip()
+        self.language = (language or "es").strip().lower()
+        set_language(self.language)
         self.feed = BinanceTickerFeed(self.crypto_symbols)
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.crypto_symbols}
         self.stock_data = {symbol: StockState(symbol=symbol) for symbol in self.stock_symbols}
@@ -414,7 +422,7 @@ class NeonQuotesApp(App[None]):
         self.startup_task: asyncio.Task[None] | None = None
         self.command_mode = False
         self.command_buffer = ""
-        self.status_hint = ":|f2 Cmd | q quit | r reset | n news | enter chart"
+        self.status_hint = f":|f2 {tr('Cmd')} | q {tr('quit')} | r {tr('reset')} | n {tr('news')} | enter {tr('chart')}"
 
     def compose(self) -> ComposeResult:
         yield Static(id="header")
@@ -434,12 +442,12 @@ class NeonQuotesApp(App[None]):
         main_table = self.query_one("#crypto_quotes", DataTable)
         main_table.cursor_type = "row"
         main_table.zebra_stripes = True
-        col_symbol = main_table.add_column("Ticker")
-        col_type = main_table.add_column("Type", width=8)
-        col_price = main_table.add_column("Price", width=15)
-        col_change = main_table.add_column("24h %", width=10)
-        col_volume = main_table.add_column("Volume", width=22)
-        col_spark = main_table.add_column("Spark")
+        col_symbol = main_table.add_column(tr("Ticker"))
+        col_type = main_table.add_column(tr("Type"), width=8)
+        col_price = main_table.add_column(tr("Price"), width=15)
+        col_change = main_table.add_column("24h %", width=9)
+        col_volume = main_table.add_column(tr("Volume"), width=17)
+        col_spark = main_table.add_column(tr("Spark"))
         self.main_col_keys = {
             "symbol": col_symbol,
             "type": col_type,
@@ -459,11 +467,11 @@ class NeonQuotesApp(App[None]):
         alerts_table.cursor_type = "row"
         alerts_table.zebra_stripes = True
         a_rank = alerts_table.add_column("#", width=3)
-        a_symbol = alerts_table.add_column("Ticker")
-        a_type = alerts_table.add_column("Type", width=8)
-        a_change = alerts_table.add_column("24h %", width=10)
-        a_price = alerts_table.add_column("Price", width=15)
-        a_volume = alerts_table.add_column("Volume", width=22)
+        a_symbol = alerts_table.add_column(tr("Ticker"))
+        a_type = alerts_table.add_column(tr("Type"), width=8)
+        a_change = alerts_table.add_column("24h %", width=9)
+        a_price = alerts_table.add_column(tr("Price"), width=15)
+        a_volume = alerts_table.add_column(tr("Volume"), width=17)
         self.alerts_col_keys = {
             "rank": a_rank,
             "symbol": a_symbol,
@@ -490,9 +498,9 @@ class NeonQuotesApp(App[None]):
         news_table.cursor_type = "row"
         news_table.zebra_stripes = True
         n_idx = news_table.add_column("#", width=3)
-        n_age = news_table.add_column("Age", width=8)
-        n_title = news_table.add_column("Headline", width=58)
-        n_source = news_table.add_column("Source", width=20)
+        n_age = news_table.add_column(tr("Age"), width=8)
+        n_title = news_table.add_column(tr("Headline"), width=58)
+        n_source = news_table.add_column(tr("Source"), width=20)
         self.news_col_keys = {
             "idx": n_idx,
             "age": n_age,
@@ -504,7 +512,7 @@ class NeonQuotesApp(App[None]):
             row_key = news_table.add_row(
                 "-",
                 "-",
-                "Loading headlines...\nPlease wait",
+                tr("Loading headlines...\nPlease wait"),
                 "-",
                 key=f"news_{i}",
                 height=2,
@@ -513,7 +521,9 @@ class NeonQuotesApp(App[None]):
 
         events_log = self.query_one("#events", RichLog)
         events_log.max_lines = MAX_EVENTS
-        self._log("Booting market stream...")
+        self._log(tr("Booting market stream..."))
+        for line in self.startup_logs:
+            self._log(line)
         self.query_one("#news_header", Static).update(
             Text("NEWS // finviz.com (refresh 10m)", style="#7aa3c5")
         )
@@ -565,7 +575,7 @@ class NeonQuotesApp(App[None]):
         age_ms = int(time.time() * 1000) - self.last_tick_ms if self.last_tick_ms else 0
         conn_color = "green" if age_ms < 3000 else "yellow" if age_ms < 10000 else "red"
         pulse = "●" if self.heartbeat else "○"
-        now = datetime.now(self.local_tz).strftime("%H:%M:%S")
+        now = format_time_local(datetime.now(self.local_tz), tzinfo=self.local_tz)
         header = (
             f"[bold #00ffae]NEON MARKET TERM[/]  "
             f"[#8ef9f3]{now}[/]  "
@@ -593,7 +603,7 @@ class NeonQuotesApp(App[None]):
             chunks.append(f"S:{symbol} {arrow} {state.price:,.4f} ({state.change_percent:+.2f}%)")
 
         if not chunks:
-            self.query_one("#ticker", Static).update("Waiting for market data...")
+            self.query_one("#ticker", Static).update(tr("Waiting for market data..."))
             return
 
         line = "   |   ".join(chunks)
@@ -662,7 +672,7 @@ class NeonQuotesApp(App[None]):
 
     def action_show_help_tip(self) -> None:
         self._log(
-            "[#ffcf5c]Tip:[/] Enter chart on focused table; ':' command mode; commands: :q :r :n :help"
+            f"[#ffcf5c]{tr('Tip:')}[/] Enter chart on focused table; ':' command mode; commands: :q :r :n :help"
         )
 
     def action_open_chart(self) -> None:
@@ -786,7 +796,10 @@ class NeonQuotesApp(App[None]):
             self.main_visible_items = []
             self.main_row_item_by_index.clear()
             with contextlib.suppress(Exception):
-                table.border_title = " MAIN TABLE "
+                table.border_title = (
+                    f" [{tr('group')} 0/0] "
+                    f"[{tr('updated')} {self.stocks_last_update}] "
+                )
             for i, row_key in enumerate(self.main_row_keys):
                 table.update_cell(row_key, self.main_col_keys["symbol"], "-" if i == 0 else "")
                 table.update_cell(row_key, self.main_col_keys["type"], "-")
@@ -797,18 +810,23 @@ class NeonQuotesApp(App[None]):
             return
 
         group_name, items = self.main_group_items[self.main_group_index]
-        self.main_visible_items = items
+        sorted_items = sorted(
+            items,
+            key=lambda item: self._get_change_percent(item[0], item[1]),
+            reverse=True,
+        )
+        self.main_visible_items = sorted_items
         self.main_row_item_by_index.clear()
         with contextlib.suppress(Exception):
             table.border_title = (
-                f" MAIN TABLE // {group_name} "
-                f"[group {self.main_group_index + 1}/{len(self.main_group_items)}] "
-                f"[updated {self.stocks_last_update}] "
+                f" {group_name.upper()} "
+                f"[{tr('group')} {self.main_group_index + 1}/{len(self.main_group_items)}] "
+                f"[{tr('updated')} {self.stocks_last_update}] "
             )
 
         for i, row_key in enumerate(self.main_row_keys):
-            if i < len(items):
-                symbol, symbol_type = items[i]
+            if i < len(sorted_items):
+                symbol, symbol_type = sorted_items[i]
                 self.main_row_item_by_index[i] = (symbol, symbol_type)
                 self._refresh_main_row(symbol, symbol_type)
                 continue
@@ -832,13 +850,13 @@ class NeonQuotesApp(App[None]):
                 continue
             entries.append((symbol, "stock", state.change_percent, state.price, state.volume))
 
-        entries.sort(key=lambda item: abs(item[2]), reverse=True)
+        entries.sort(key=lambda item: item[2], reverse=True)
         top = entries[:ALERTS_TABLE_SIZE]
         self.alerts_row_item_by_index.clear()
         with contextlib.suppress(Exception):
             table.border_title = (
-                f" ALERTS TABLE // top {ALERTS_TABLE_SIZE} abs movers "
-                f"[updated {self.stocks_last_update}] "
+                f" {tr('ALERTAS')} "
+                f"[{tr('updated')} {self.stocks_last_update}] "
             )
 
         for i, row_key in enumerate(self.alerts_row_keys):
@@ -855,24 +873,31 @@ class NeonQuotesApp(App[None]):
             self.alerts_row_item_by_index[i] = (symbol, symbol_type)
             color = "#00ffae" if change_pct >= 0 else "#ff5e7a"
             type_label = "CRYPTO" if symbol_type == "crypto" else "STOCK"
-            table.update_cell(row_key, self.alerts_col_keys["symbol"], symbol)
+            table.update_cell(row_key, self.alerts_col_keys["symbol"], self._ticker_label(symbol, symbol_type))
             table.update_cell(row_key, self.alerts_col_keys["type"], type_label)
             table.update_cell(
                 row_key,
                 self.alerts_col_keys["change"],
-                Text(f"{change_pct:>+9.2f}%", style=f"bold {color}"),
+                Text(f"{change_pct:>+8.2f}%", style=f"bold {color}"),
             )
             table.update_cell(
                 row_key,
                 self.alerts_col_keys["price"],
                 Text(f"{price:>15,.4f}", style=color),
             )
-            table.update_cell(row_key, self.alerts_col_keys["volume"], f"{volume:>22,.2f}")
+            table.update_cell(row_key, self.alerts_col_keys["volume"], f"{volume:>17,.2f}")
+
+    def _get_change_percent(self, symbol: str, symbol_type: str) -> float:
+        if symbol_type == "crypto":
+            state = self.symbol_data.get(symbol)
+            return state.change_percent if state is not None else -9999.0
+        state = self.stock_data.get(symbol)
+        return state.change_percent if state is not None else -9999.0
 
     async def _preload_history(self) -> None:
         if self.boot_modal:
             self.boot_modal.set_total(len(self.crypto_symbols) + len(self.stock_symbols))
-            self.boot_modal.set_phase("Syncing crypto history")
+            self.boot_modal.set_phase(tr("Syncing crypto history"))
         self._log(f"[#2ec4b6]HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol...")
         for symbol in self.crypto_symbols:
             try:
@@ -900,7 +925,7 @@ class NeonQuotesApp(App[None]):
             first_group_stocks = [s for s, t in self.main_group_items[0][1] if t == "stock"]
         preload_symbols = current_group_stocks or first_group_stocks or self.stock_symbols[:20]
         if self.boot_modal:
-            self.boot_modal.set_phase("Syncing stock history")
+            self.boot_modal.set_phase(tr("Syncing stock history"))
             self.boot_modal.set_total(len(self.crypto_symbols) + len(preload_symbols))
         self._log(
             f"[#ff9f43]STOCKS HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol..."
@@ -1107,7 +1132,7 @@ class NeonQuotesApp(App[None]):
                 table.update_cell(row_key, self.news_col_keys["idx"], f"{i + 1}")
                 table.update_cell(row_key, self.news_col_keys["age"], "-")
                 table.update_cell(
-                    row_key, self.news_col_keys["title"], "No headlines available\nTry refresh [n]"
+                    row_key, self.news_col_keys["title"], tr("No headlines available\nTry refresh [n]")
                 )
                 table.update_cell(row_key, self.news_col_keys["source"], "-")
             return
@@ -1211,7 +1236,7 @@ class NeonQuotesApp(App[None]):
     def _enter_command_mode(self) -> None:
         self.command_mode = True
         self.command_buffer = ""
-        self._log("[#ffcf5c]COMMAND[/] mode enabled")
+        self._log(f"[#ffcf5c]COMMAND[/] {tr('COMMAND mode enabled')}")
         command_input = self.query_one("#command_input", Input)
         command_input.display = True
         command_input.value = ":"
@@ -1221,7 +1246,7 @@ class NeonQuotesApp(App[None]):
     def _exit_command_mode(self) -> None:
         self.command_mode = False
         self.command_buffer = ""
-        self._log("[#ffcf5c]COMMAND[/] mode disabled")
+        self._log(f"[#ffcf5c]COMMAND[/] {tr('COMMAND mode disabled')}")
         command_input = self.query_one("#command_input", Input)
         command_input.value = ""
         command_input.display = False
@@ -1232,12 +1257,18 @@ class NeonQuotesApp(App[None]):
         line = self.query_one("#status_line", Static)
 
         if self.command_mode:
-            left = f":{self.command_buffer}█ | [Enter] run | [Esc] normal | q quit | r reset | n news | help"
-            right = "status: enter command"
+            left = (
+                f":{self.command_buffer}█ | [Enter] {tr('run')} | [Esc] {tr('normal')} | "
+                f"q {tr('quit')} | r {tr('reset')} | n {tr('news')} | {tr('help')}"
+            )
+            right = tr("status: enter command")
             right_style = "#ffcf5c"
         else:
-            left = ": [f2] Cmd | q quit | r reset | n news | [enter] chart"
-            right = "status: normal"
+            left = (
+                f": [f2] {tr('Cmd')} | q {tr('quit')} | r {tr('reset')} | "
+                f"n {tr('news')} | [enter] {tr('chart')}"
+            )
+            right = tr("status: normal")
             right_style = "#00ffae"
 
         total_width = max(40, self.size.width - 2)
@@ -1265,7 +1296,7 @@ class NeonQuotesApp(App[None]):
             self.action_refresh_news()
             return
         if cmd == "help":
-            self._log("[#ffcf5c]Commands:[/] :q :r :n :help")
+            self._log(f"[#ffcf5c]{tr('Commands:')}[/] :q :r :n :help")
             return
         self._log(f"[yellow]Command unknown:[/] :{cmd}")
 
@@ -1303,7 +1334,7 @@ class NeonQuotesApp(App[None]):
         assert state.points is not None
         state.points.append(quote.price)
         self._update_candles(quote.symbol, quote.price, quote.event_time_ms)
-        self._refresh_main_row(quote.symbol, "crypto")
+        self._update_main_group_panel()
         self._update_alerts_panel()
 
     def _update_candles(self, symbol: str, price: float, event_time_ms: int) -> None:
@@ -1335,8 +1366,8 @@ class NeonQuotesApp(App[None]):
                 return
             color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
             price = Text(f"{state.price:>15,.4f}", style=color)
-            change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
-            volume = f"{state.volume:>22,.2f}"
+            change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
+            volume = f"{state.volume:>17,.2f}"
             spark = self._sparkline(state.points or deque())
             type_label = "CRYPTO"
         else:
@@ -1346,12 +1377,12 @@ class NeonQuotesApp(App[None]):
                 self.stock_data[symbol] = state
             color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
             price = Text(f"{state.price:>15,.4f}", style=color)
-            change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
-            volume = f"{state.volume:>22,.0f}"
+            change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
+            volume = f"{state.volume:>17,.0f}"
             spark = self._sparkline(state.points or deque())
             type_label = "STOCK"
 
-        table.update_cell(row_key, self.main_col_keys["symbol"], symbol)
+        table.update_cell(row_key, self.main_col_keys["symbol"], self._ticker_label(symbol, symbol_type))
         table.update_cell(row_key, self.main_col_keys["type"], type_label)
         table.update_cell(row_key, self.main_col_keys["price"], price)
         table.update_cell(row_key, self.main_col_keys["change"], change)
@@ -1369,7 +1400,7 @@ class NeonQuotesApp(App[None]):
         assert state.points is not None
         state.points.append(quote.price)
         self._update_stock_candles(quote.symbol, quote.price, quote.event_time_ms)
-        self._refresh_main_row(quote.symbol, "stock")
+        self._update_main_group_panel()
         self._update_alerts_panel()
 
     def _update_stock_candles(self, symbol: str, price: float, event_time_ms: int) -> None:
@@ -1391,6 +1422,12 @@ class NeonQuotesApp(App[None]):
 
     def _refresh_stock_row(self, state: StockState) -> None:
         self._refresh_main_row(state.symbol, "stock")
+
+    def _ticker_label(self, symbol: str, symbol_type: str) -> str:
+        name = self.symbol_names.get((symbol, symbol_type), "").strip()
+        if not name:
+            return symbol
+        return f"{symbol}:{name[:10]}"
 
     def _sparkline(self, values: deque[float]) -> Text:
         if not values:
@@ -1414,6 +1451,7 @@ class NeonQuotesApp(App[None]):
             candles = self._resample_candles(list(self.candles.get(state.symbol, deque())), timeframe)
         return self._build_chart_from_series(
             symbol=state.symbol,
+            display_name=self.symbol_names.get((state.symbol, "crypto"), ""),
             market_label="CRYPTO",
             price=state.price,
             change_percent=state.change_percent,
@@ -1432,6 +1470,7 @@ class NeonQuotesApp(App[None]):
             candles = self._resample_candles(list(self.stock_candles.get(state.symbol, deque())), timeframe)
         return self._build_chart_from_series(
             symbol=state.symbol,
+            display_name=self.symbol_names.get((state.symbol, "stock"), ""),
             market_label="STOCK",
             price=state.price,
             change_percent=state.change_percent,
@@ -1446,6 +1485,7 @@ class NeonQuotesApp(App[None]):
         self,
         *,
         symbol: str,
+        display_name: str,
         market_label: str,
         price: float,
         change_percent: float,
@@ -1459,7 +1499,10 @@ class NeonQuotesApp(App[None]):
         visible_candles = max(24, target_candles)
 
         chart = Text()
-        chart.append(f"{symbol} // {market_label} SNAPSHOT\n", style="bold #99e2ff")
+        if display_name:
+            chart.append(f"{symbol} ({display_name}) // {market_label} SNAPSHOT\n", style="bold #99e2ff")
+        else:
+            chart.append(f"{symbol} // {market_label} SNAPSHOT\n", style="bold #99e2ff")
         chart.append(
             f"price: {price:,.4f}   change: {change_percent:+.2f}%   volume: {volume:,.2f}\n",
             style=f"bold {color}",
@@ -1763,11 +1806,17 @@ def run_app(
     crypto_symbols: Iterable[str] | None = None,
     stock_symbols: Iterable[str] | None = None,
     timezone: str = "",
+    language: str = "es",
     groups: Iterable[dict[str, Any]] | None = None,
+    symbol_names: dict[tuple[str, str], str] | None = None,
+    startup_logs: Iterable[str] | None = None,
 ) -> None:
     NeonQuotesApp(
         crypto_symbols=crypto_symbols,
         stock_symbols=stock_symbols,
         timezone=timezone,
+        language=language,
         groups=groups,
+        symbol_names=symbol_names,
+        startup_logs=startup_logs,
     ).run()

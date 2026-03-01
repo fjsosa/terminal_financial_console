@@ -1,400 +1,567 @@
-# Neon Quotes configuration
-# Precedence: config.yml < environment variables < CLI arguments
-timezone: "America/Argentina/Buenos_Aires"
-
+timezone: America/Argentina/Buenos_Aires
+language: es
 groups:
-  - name: "Crypto"
-    symbols:
-      - symbol: BTCUSDT
-        type: crypto
-      - symbol: ETHUSDT
-        type: crypto
-      - symbol: SOLUSDT
-        type: crypto
-      - symbol: ADAUSDT
-        type: crypto
-      - symbol: BNBUSDT
-        type: crypto
-      - symbol: XRPUSDT
-        type: crypto
-      - symbol: DOGEUSDT
-        type: crypto
-      - symbol: AVAXUSDT
-        type: crypto
-      - symbol: MATICUSDT
-        type: crypto
-      - symbol: DOTUSDT
-        type: crypto
-      - symbol: LINKUSDT
-        type: crypto
-      - symbol: LTCUSDT
-        type: crypto
-      - symbol: BCHUSDT
-        type: crypto
-      - symbol: TRXUSDT
-        type: crypto
-      - symbol: UNIUSDT
-        type: crypto
-
-  - name: "Tecnologia"
-    symbols:
-      - symbol: AAPL
-        type: stock
-      - symbol: MSFT
-        type: stock
-      - symbol: NVDA
-        type: stock
-      - symbol: GOOGL
-        type: stock
-      - symbol: META
-        type: stock
-      - symbol: ORCL
-        type: stock
-      - symbol: ADBE
-        type: stock
-      - symbol: CRM
-        type: stock
-      - symbol: AMD
-        type: stock
-      - symbol: INTC
-        type: stock
-      - symbol: CSCO
-        type: stock
-      - symbol: IBM
-        type: stock
-      - symbol: QCOM
-        type: stock
-      - symbol: AVGO
-        type: stock
-      - symbol: TXN
-        type: stock
-
-  - name: "Finanzas"
-    symbols:
-      - symbol: JPM
-        type: stock
-      - symbol: GS
-        type: stock
-      - symbol: V
-        type: stock
-      - symbol: MA
-        type: stock
-      - symbol: BAC
-        type: stock
-      - symbol: C
-        type: stock
-      - symbol: WFC
-        type: stock
-      - symbol: MS
-        type: stock
-      - symbol: AXP
-        type: stock
-      - symbol: BLK
-        type: stock
-      - symbol: SPGI
-        type: stock
-      - symbol: SCHW
-        type: stock
-      - symbol: USB
-        type: stock
-      - symbol: PNC
-        type: stock
-      - symbol: COF
-        type: stock
-
-  - name: "Salud"
-    symbols:
-      - symbol: JNJ
-        type: stock
-      - symbol: PFE
-        type: stock
-      - symbol: UNH
-        type: stock
-      - symbol: MRK
-        type: stock
-      - symbol: ABBV
-        type: stock
-      - symbol: LLY
-        type: stock
-      - symbol: TMO
-        type: stock
-      - symbol: ABT
-        type: stock
-      - symbol: BMY
-        type: stock
-      - symbol: MDT
-        type: stock
-      - symbol: AMGN
-        type: stock
-      - symbol: GILD
-        type: stock
-      - symbol: CI
-        type: stock
-      - symbol: CVS
-        type: stock
-      - symbol: ISRG
-        type: stock
-
-  - name: "Consumo basico"
-    symbols:
-      - symbol: PG
-        type: stock
-      - symbol: KO
-        type: stock
-      - symbol: WMT
-        type: stock
-      - symbol: COST
-        type: stock
-      - symbol: PEP
-        type: stock
-      - symbol: PM
-        type: stock
-      - symbol: MO
-        type: stock
-      - symbol: CL
-        type: stock
-      - symbol: KMB
-        type: stock
-      - symbol: GIS
-        type: stock
-      - symbol: KR
-        type: stock
-      - symbol: EL
-        type: stock
-      - symbol: MNST
-        type: stock
-      - symbol: DG
-        type: stock
-      - symbol: SYY
-        type: stock
-
-  - name: "Consumo discrecional"
-    symbols:
-      - symbol: AMZN
-        type: stock
-      - symbol: TSLA
-        type: stock
-      - symbol: NKE
-        type: stock
-      - symbol: HD
-        type: stock
-      - symbol: MCD
-        type: stock
-      - symbol: SBUX
-        type: stock
-      - symbol: LOW
-        type: stock
-      - symbol: BKNG
-        type: stock
-      - symbol: GM
-        type: stock
-      - symbol: F
-        type: stock
-      - symbol: ROST
-        type: stock
-      - symbol: TGT
-        type: stock
-      - symbol: MAR
-        type: stock
-      - symbol: DIS
-        type: stock
-      - symbol: EBAY
-        type: stock
-
-  - name: "Energia"
-    symbols:
-      - symbol: XOM
-        type: stock
-      - symbol: CVX
-        type: stock
-      - symbol: COP
-        type: stock
-      - symbol: SLB
-        type: stock
-      - symbol: EOG
-        type: stock
-      - symbol: MPC
-        type: stock
-      - symbol: PSX
-        type: stock
-      - symbol: OXY
-        type: stock
-      - symbol: VLO
-        type: stock
-      - symbol: KMI
-        type: stock
-      - symbol: WMB
-        type: stock
-      - symbol: PXD
-        type: stock
-      - symbol: HAL
-        type: stock
-      - symbol: DVN
-        type: stock
-      - symbol: FANG
-        type: stock
-
-  - name: "Industriales"
-    symbols:
-      - symbol: BA
-        type: stock
-      - symbol: CAT
-        type: stock
-      - symbol: GE
-        type: stock
-      - symbol: HON
-        type: stock
-      - symbol: UPS
-        type: stock
-      - symbol: UNP
-        type: stock
-      - symbol: RTX
-        type: stock
-      - symbol: DE
-        type: stock
-      - symbol: LMT
-        type: stock
-      - symbol: MMM
-        type: stock
-      - symbol: NOC
-        type: stock
-      - symbol: ETN
-        type: stock
-      - symbol: EMR
-        type: stock
-      - symbol: GD
-        type: stock
-      - symbol: ITW
-        type: stock
-
-  - name: "Servicios de comunicacion"
-    symbols:
-      - symbol: T
-        type: stock
-      - symbol: CMCSA
-        type: stock
-      - symbol: VZ
-        type: stock
-      - symbol: TMUS
-        type: stock
-      - symbol: CHTR
-        type: stock
-      - symbol: DIS
-        type: stock
-      - symbol: WBD
-        type: stock
-      - symbol: NFLX
-        type: stock
-      - symbol: FOXA
-        type: stock
-      - symbol: PARA
-        type: stock
-      - symbol: EA
-        type: stock
-      - symbol: SPOT
-        type: stock
-      - symbol: SNAP
-        type: stock
-      - symbol: RBLX
-        type: stock
-      - symbol: BILI
-        type: stock
-
-  - name: "Materiales"
-    symbols:
-      - symbol: DOW
-        type: stock
-      - symbol: DD
-        type: stock
-      - symbol: LIN
-        type: stock
-      - symbol: APD
-        type: stock
-      - symbol: ECL
-        type: stock
-      - symbol: SHW
-        type: stock
-      - symbol: NUE
-        type: stock
-      - symbol: NEM
-        type: stock
-      - symbol: FCX
-        type: stock
-      - symbol: VMC
-        type: stock
-      - symbol: MLM
-        type: stock
-      - symbol: IFF
-        type: stock
-      - symbol: PPG
-        type: stock
-      - symbol: CE
-        type: stock
-      - symbol: ALB
-        type: stock
-
-  - name: "Inmobiliario"
-    symbols:
-      - symbol: SPG
-        type: stock
-      - symbol: PLD
-        type: stock
-      - symbol: AMT
-        type: stock
-      - symbol: EQIX
-        type: stock
-      - symbol: O
-        type: stock
-      - symbol: PSA
-        type: stock
-      - symbol: WELL
-        type: stock
-      - symbol: VICI
-        type: stock
-      - symbol: AVB
-        type: stock
-      - symbol: EQR
-        type: stock
-      - symbol: SBAC
-        type: stock
-      - symbol: DLR
-        type: stock
-      - symbol: ARE
-        type: stock
-      - symbol: KIM
-        type: stock
-      - symbol: ESS
-        type: stock
-
-  - name: "Utilities"
-    symbols:
-      - symbol: NEE
-        type: stock
-      - symbol: DUK
-        type: stock
-      - symbol: SO
-        type: stock
-      - symbol: AEP
-        type: stock
-      - symbol: EXC
-        type: stock
-      - symbol: SRE
-        type: stock
-      - symbol: XEL
-        type: stock
-      - symbol: ED
-        type: stock
-      - symbol: PEG
-        type: stock
-      - symbol: WEC
-        type: stock
-      - symbol: AEE
-        type: stock
-      - symbol: ETR
-        type: stock
-      - symbol: FE
-        type: stock
-      - symbol: PCG
-        type: stock
-      - symbol: ES
-        type: stock
+- name: Crypto
+  symbols:
+  - symbol: BTCUSDT
+    type: crypto
+    name: Bitcoin
+  - symbol: ETHUSDT
+    type: crypto
+    name: Ethereum
+  - symbol: SOLUSDT
+    type: crypto
+    name: Solana
+  - symbol: ADAUSDT
+    type: crypto
+    name: Cardano
+  - symbol: BNBUSDT
+    type: crypto
+    name: BNB
+  - symbol: XRPUSDT
+    type: crypto
+    name: XRP
+  - symbol: DOGEUSDT
+    type: crypto
+    name: Dogecoin
+  - symbol: AVAXUSDT
+    type: crypto
+    name: Avalanche
+  - symbol: MATICUSDT
+    type: crypto
+    name: Polygon
+  - symbol: DOTUSDT
+    type: crypto
+    name: Polkadot
+  - symbol: LINKUSDT
+    type: crypto
+    name: Chainlink
+  - symbol: LTCUSDT
+    type: crypto
+    name: Litecoin
+  - symbol: BCHUSDT
+    type: crypto
+    name: Bitcoin Cash
+  - symbol: TRXUSDT
+    type: crypto
+    name: TRON
+  - symbol: UNIUSDT
+    type: crypto
+    name: Uniswap
+- name: Tecnologia
+  symbols:
+  - symbol: AAPL
+    type: stock
+    name: Apple Inc.
+  - symbol: MSFT
+    type: stock
+    name: Microsoft Corporation
+  - symbol: NVDA
+    type: stock
+    name: NVIDIA Corporation
+  - symbol: GOOGL
+    type: stock
+    name: Alphabet Inc.
+  - symbol: META
+    type: stock
+    name: Meta Platforms, Inc.
+  - symbol: ORCL
+    type: stock
+    name: Oracle Corporation
+  - symbol: ADBE
+    type: stock
+    name: Adobe Inc.
+  - symbol: CRM
+    type: stock
+    name: Salesforce, Inc.
+  - symbol: AMD
+    type: stock
+    name: Advanced Micro Devices, Inc.
+  - symbol: INTC
+    type: stock
+    name: Intel Corporation
+  - symbol: CSCO
+    type: stock
+    name: Cisco Systems, Inc.
+  - symbol: IBM
+    type: stock
+    name: International Business Machines
+  - symbol: QCOM
+    type: stock
+    name: QUALCOMM Incorporated
+  - symbol: AVGO
+    type: stock
+    name: Broadcom Inc.
+  - symbol: TXN
+    type: stock
+    name: Texas Instruments Incorporated
+- name: Finanzas
+  symbols:
+  - symbol: JPM
+    type: stock
+    name: JP Morgan Chase & Co.
+  - symbol: GS
+    type: stock
+    name: Goldman Sachs Group, Inc. (The)
+  - symbol: V
+    type: stock
+    name: Visa Inc.
+  - symbol: MA
+    type: stock
+    name: Mastercard Incorporated
+  - symbol: BAC
+    type: stock
+    name: Bank of America Corporation
+  - symbol: C
+    type: stock
+    name: Citigroup, Inc.
+  - symbol: WFC
+    type: stock
+    name: Wells Fargo & Company
+  - symbol: MS
+    type: stock
+    name: Morgan Stanley
+  - symbol: AXP
+    type: stock
+    name: American Express Company
+  - symbol: BLK
+    type: stock
+    name: BlackRock, Inc.
+  - symbol: SPGI
+    type: stock
+    name: S&P Global Inc.
+  - symbol: SCHW
+    type: stock
+    name: Charles Schwab Corporation (The
+  - symbol: USB
+    type: stock
+    name: U.S. Bancorp
+  - symbol: PNC
+    type: stock
+    name: PNC Financial Services Group, I
+  - symbol: COF
+    type: stock
+    name: Capital One Financial Corporati
+- name: Salud
+  symbols:
+  - symbol: JNJ
+    type: stock
+    name: Johnson & Johnson
+  - symbol: PFE
+    type: stock
+    name: Pfizer, Inc.
+  - symbol: UNH
+    type: stock
+    name: UnitedHealth Group Incorporated
+  - symbol: MRK
+    type: stock
+    name: Merck & Company, Inc.
+  - symbol: ABBV
+    type: stock
+    name: AbbVie Inc.
+  - symbol: LLY
+    type: stock
+    name: Eli Lilly and Company
+  - symbol: TMO
+    type: stock
+    name: Thermo Fisher Scientific Inc
+  - symbol: ABT
+    type: stock
+    name: Abbott Laboratories
+  - symbol: BMY
+    type: stock
+    name: Bristol-Myers Squibb Company
+  - symbol: MDT
+    type: stock
+    name: Medtronic plc.
+  - symbol: AMGN
+    type: stock
+    name: Amgen Inc.
+  - symbol: GILD
+    type: stock
+    name: Gilead Sciences, Inc.
+  - symbol: CI
+    type: stock
+    name: The Cigna Group
+  - symbol: CVS
+    type: stock
+    name: CVS Health Corporation
+  - symbol: ISRG
+    type: stock
+    name: Intuitive Surgical, Inc.
+- name: Consumo basico
+  symbols:
+  - symbol: PG
+    type: stock
+    name: Procter & Gamble Company (The)
+  - symbol: KO
+    type: stock
+    name: Coca-Cola Company (The)
+  - symbol: WMT
+    type: stock
+    name: Walmart Inc.
+  - symbol: COST
+    type: stock
+    name: Costco Wholesale Corporation
+  - symbol: PEP
+    type: stock
+    name: Pepsico, Inc.
+  - symbol: PM
+    type: stock
+    name: Philip Morris International Inc
+  - symbol: MO
+    type: stock
+    name: Altria Group, Inc.
+  - symbol: CL
+    type: stock
+    name: Colgate-Palmolive Company
+  - symbol: KMB
+    type: stock
+    name: Kimberly-Clark Corporation
+  - symbol: GIS
+    type: stock
+    name: General Mills, Inc.
+  - symbol: KR
+    type: stock
+    name: Kroger Company (The)
+  - symbol: EL
+    type: stock
+    name: Estee Lauder Companies, Inc. (T
+  - symbol: MNST
+    type: stock
+    name: Monster Beverage Corporation
+  - symbol: DG
+    type: stock
+    name: Dollar General Corporation
+  - symbol: SYY
+    type: stock
+    name: Sysco Corporation
+- name: Consumo discrecional
+  symbols:
+  - symbol: AMZN
+    type: stock
+    name: Amazon.com, Inc.
+  - symbol: TSLA
+    type: stock
+    name: Tesla, Inc.
+  - symbol: NKE
+    type: stock
+    name: Nike, Inc.
+  - symbol: HD
+    type: stock
+    name: Home Depot, Inc. (The)
+  - symbol: MCD
+    type: stock
+    name: McDonald's Corporation
+  - symbol: SBUX
+    type: stock
+    name: Starbucks Corporation
+  - symbol: LOW
+    type: stock
+    name: Lowe's Companies, Inc.
+  - symbol: BKNG
+    type: stock
+    name: Booking Holdings Inc. Common St
+  - symbol: GM
+    type: stock
+    name: General Motors Company
+  - symbol: F
+    type: stock
+    name: Ford Motor Company
+  - symbol: ROST
+    type: stock
+    name: Ross Stores, Inc.
+  - symbol: TGT
+    type: stock
+    name: Target Corporation
+  - symbol: MAR
+    type: stock
+    name: Marriott International
+  - symbol: DIS
+    type: stock
+    name: Walt Disney Company (The)
+  - symbol: EBAY
+    type: stock
+    name: eBay Inc.
+- name: Energia
+  symbols:
+  - symbol: XOM
+    type: stock
+    name: Exxon Mobil Corporation
+  - symbol: CVX
+    type: stock
+    name: Chevron Corporation
+  - symbol: COP
+    type: stock
+    name: ConocoPhillips
+  - symbol: SLB
+    type: stock
+    name: SLB Limited
+  - symbol: EOG
+    type: stock
+    name: EOG Resources, Inc.
+  - symbol: MPC
+    type: stock
+    name: Marathon Petroleum Corporation
+  - symbol: PSX
+    type: stock
+    name: Phillips 66
+  - symbol: OXY
+    type: stock
+    name: Occidental Petroleum Corporatio
+  - symbol: VLO
+    type: stock
+    name: Valero Energy Corporation
+  - symbol: KMI
+    type: stock
+    name: Kinder Morgan, Inc.
+  - symbol: WMB
+    type: stock
+    name: Williams Companies, Inc. (The)
+  - symbol: PXD
+    type: stock
+    name: PXD
+  - symbol: HAL
+    type: stock
+    name: Halliburton Company
+  - symbol: DVN
+    type: stock
+    name: Devon Energy Corporation
+  - symbol: FANG
+    type: stock
+    name: Diamondback Energy, Inc.
+- name: Industriales
+  symbols:
+  - symbol: BA
+    type: stock
+    name: Boeing Company (The)
+  - symbol: CAT
+    type: stock
+    name: Caterpillar, Inc.
+  - symbol: GE
+    type: stock
+    name: GE Aerospace
+  - symbol: HON
+    type: stock
+    name: Honeywell International Inc.
+  - symbol: UPS
+    type: stock
+    name: United Parcel Service, Inc.
+  - symbol: UNP
+    type: stock
+    name: Union Pacific Corporation
+  - symbol: RTX
+    type: stock
+    name: RTX Corporation
+  - symbol: DE
+    type: stock
+    name: Deere & Company
+  - symbol: LMT
+    type: stock
+    name: Lockheed Martin Corporation
+  - symbol: MMM
+    type: stock
+    name: 3M Company
+  - symbol: NOC
+    type: stock
+    name: Northrop Grumman Corporation
+  - symbol: ETN
+    type: stock
+    name: Eaton Corporation, PLC
+  - symbol: EMR
+    type: stock
+    name: Emerson Electric Company
+  - symbol: GD
+    type: stock
+    name: General Dynamics Corporation
+  - symbol: ITW
+    type: stock
+    name: Illinois Tool Works Inc.
+- name: Servicios de comunicacion
+  symbols:
+  - symbol: T
+    type: stock
+    name: AT&T Inc.
+  - symbol: CMCSA
+    type: stock
+    name: Comcast Corporation
+  - symbol: VZ
+    type: stock
+    name: Verizon Communications Inc.
+  - symbol: TMUS
+    type: stock
+    name: T-Mobile US, Inc.
+  - symbol: CHTR
+    type: stock
+    name: Charter Communications, Inc.
+  - symbol: DIS
+    type: stock
+    name: Walt Disney Company (The)
+  - symbol: WBD
+    type: stock
+    name: Warner Bros. Discovery, Inc. -
+  - symbol: NFLX
+    type: stock
+    name: Netflix, Inc.
+  - symbol: FOXA
+    type: stock
+    name: Fox Corporation
+  - symbol: PARA
+    type: stock
+    name: PARA
+  - symbol: EA
+    type: stock
+    name: Electronic Arts Inc.
+  - symbol: SPOT
+    type: stock
+    name: Spotify Technology S.A.
+  - symbol: SNAP
+    type: stock
+    name: Snap Inc.
+  - symbol: RBLX
+    type: stock
+    name: Roblox Corporation
+  - symbol: BILI
+    type: stock
+    name: Bilibili Inc.
+- name: Materiales
+  symbols:
+  - symbol: DOW
+    type: stock
+    name: Dow Inc.
+  - symbol: DD
+    type: stock
+    name: DuPont de Nemours, Inc.
+  - symbol: LIN
+    type: stock
+    name: Linde plc
+  - symbol: APD
+    type: stock
+    name: Air Products and Chemicals, Inc
+  - symbol: ECL
+    type: stock
+    name: Ecolab Inc.
+  - symbol: SHW
+    type: stock
+    name: Sherwin-Williams Company (The)
+  - symbol: NUE
+    type: stock
+    name: Nucor Corporation
+  - symbol: NEM
+    type: stock
+    name: Newmont Corporation
+  - symbol: FCX
+    type: stock
+    name: Freeport-McMoRan, Inc.
+  - symbol: VMC
+    type: stock
+    name: Vulcan Materials Company (Holdi
+  - symbol: MLM
+    type: stock
+    name: Martin Marietta Materials, Inc.
+  - symbol: IFF
+    type: stock
+    name: International Flavors & Fragran
+  - symbol: PPG
+    type: stock
+    name: PPG Industries, Inc.
+  - symbol: CE
+    type: stock
+    name: Celanese Corporation
+  - symbol: ALB
+    type: stock
+    name: Albemarle Corporation
+- name: Inmobiliario
+  symbols:
+  - symbol: SPG
+    type: stock
+    name: Simon Property Group, Inc.
+  - symbol: PLD
+    type: stock
+    name: Prologis, Inc.
+  - symbol: AMT
+    type: stock
+    name: American Tower Corporation (REI
+  - symbol: EQIX
+    type: stock
+    name: Equinix, Inc.
+  - symbol: O
+    type: stock
+    name: Realty Income Corporation
+  - symbol: PSA
+    type: stock
+    name: Public Storage
+  - symbol: WELL
+    type: stock
+    name: Welltower Inc.
+  - symbol: VICI
+    type: stock
+    name: VICI Properties Inc.
+  - symbol: AVB
+    type: stock
+    name: AvalonBay Communities, Inc.
+  - symbol: EQR
+    type: stock
+    name: Equity Residential
+  - symbol: SBAC
+    type: stock
+    name: SBA Communications Corporation
+  - symbol: DLR
+    type: stock
+    name: Digital Realty Trust, Inc.
+  - symbol: ARE
+    type: stock
+    name: Alexandria Real Estate Equities
+  - symbol: KIM
+    type: stock
+    name: Kimco Realty Corporation (HC)
+  - symbol: ESS
+    type: stock
+    name: Essex Property Trust, Inc.
+- name: Utilities
+  symbols:
+  - symbol: NEE
+    type: stock
+    name: NextEra Energy, Inc.
+  - symbol: DUK
+    type: stock
+    name: Duke Energy Corporation (Holdin
+  - symbol: SO
+    type: stock
+    name: Southern Company (The)
+  - symbol: AEP
+    type: stock
+    name: American Electric Power Company
+  - symbol: EXC
+    type: stock
+    name: Exelon Corporation
+  - symbol: SRE
+    type: stock
+    name: DBA Sempra
+  - symbol: XEL
+    type: stock
+    name: Xcel Energy Inc.
+  - symbol: ED
+    type: stock
+    name: Consolidated Edison, Inc.
+  - symbol: PEG
+    type: stock
+    name: Public Service Enterprise Group
+  - symbol: WEC
+    type: stock
+    name: WEC Energy Group, Inc.
+  - symbol: AEE
+    type: stock
+    name: Ameren Corporation
+  - symbol: ETR
+    type: stock
+    name: Entergy Corporation
+  - symbol: FE
+    type: stock
+    name: FirstEnergy Corp.
+  - symbol: PCG
+    type: stock
+    name: Pacific Gas & Electric Co.
+  - symbol: ES
+    type: stock
+    name: Eversource Energy (D/B/A)

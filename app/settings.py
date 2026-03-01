@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_CRYPTO_SYMBOLS, DEFAULT_STOCK_SYMBOLS
+from .config import DEFAULT_CRYPTO_SYMBOLS, DEFAULT_LANGUAGE, DEFAULT_STOCK_SYMBOLS
 
 
 @dataclass(slots=True)
@@ -13,7 +13,10 @@ class AppSettings:
     crypto_symbols: list[str]
     stock_symbols: list[str]
     timezone: str
+    language: str
     groups: list[dict[str, Any]]
+    config_path: str
+    symbols_from_config: bool
 
 
 def _parse_symbols(raw: str | list[str] | None) -> list[str]:
@@ -46,6 +49,14 @@ def _load_yaml_config(path: Path) -> dict:
         if indent == 0 and stripped.startswith("timezone:"):
             value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             data["timezone"] = value
+            current_list_key = ""
+            current_group = None
+            current_symbol_item = None
+            continue
+
+        if indent == 0 and stripped.startswith("language:"):
+            value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            data["language"] = value
             current_list_key = ""
             current_group = None
             current_symbol_item = None
@@ -90,6 +101,11 @@ def _load_yaml_config(path: Path) -> dict:
         if indent == 8 and stripped.startswith("type:") and current_symbol_item is not None:
             symbol_type = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_symbol_item["type"] = symbol_type
+            continue
+
+        if indent == 8 and stripped.startswith("name:") and current_symbol_item is not None:
+            symbol_name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            current_symbol_item["name"] = symbol_name
             continue
 
         if indent == 0 and ":" in stripped and not stripped.startswith("-"):
@@ -183,7 +199,12 @@ def _normalize_groups(groups: object) -> list[dict[str, Any]]:
                 continue
             if symbol_type not in {"crypto", "stock"}:
                 symbol_type = "crypto" if symbol.endswith("USDT") else "stock"
-            normalized_items.append({"symbol": symbol, "type": symbol_type})
+            normalized: dict[str, str] = {"symbol": symbol, "type": symbol_type}
+            if isinstance(item, dict):
+                item_name = str(item.get("name") or "").strip()
+                if item_name:
+                    normalized["name"] = item_name
+            normalized_items.append(normalized)
         if normalized_items:
             out.append({"name": name, "symbols": normalized_items})
     return out
@@ -195,6 +216,7 @@ def load_settings(
     cli_crypto_symbols: list[str] | None,
     cli_stock_symbols: list[str] | None,
     cli_timezone: str | None,
+    cli_language: str | None,
 ) -> AppSettings:
     path = Path(config_path or "config.yml")
     cfg = _load_yaml_config(path)
@@ -203,6 +225,7 @@ def load_settings(
     crypto_symbols = list(DEFAULT_CRYPTO_SYMBOLS)
     stock_symbols = list(DEFAULT_STOCK_SYMBOLS)
     timezone = ""
+    language = DEFAULT_LANGUAGE
     groups: list[dict[str, Any]] = []
 
     # 2) config.yml
@@ -229,6 +252,9 @@ def load_settings(
     cfg_tz = str(cfg.get("timezone", "")).strip()
     if cfg_tz:
         timezone = cfg_tz
+    cfg_lang = str(cfg.get("language", "")).strip().lower()
+    if cfg_lang:
+        language = cfg_lang
 
     # 3) environment overrides
     env_crypto_symbols = _parse_symbols(
@@ -244,6 +270,9 @@ def load_settings(
     env_tz = (os.getenv("NEON_TZ") or "").strip()
     if env_tz:
         timezone = env_tz
+    env_lang = (os.getenv("NEON_LANG") or "").strip().lower()
+    if env_lang:
+        language = env_lang
 
     # 4) CLI overrides (highest priority)
     if cli_crypto_symbols:
@@ -252,8 +281,13 @@ def load_settings(
         stock_symbols = _parse_symbols(cli_stock_symbols)
     if cli_timezone and cli_timezone.strip():
         timezone = cli_timezone.strip()
+    if cli_language and cli_language.strip():
+        language = cli_language.strip().lower()
 
-    if cli_crypto_symbols or cli_stock_symbols or env_crypto_symbols or env_stock_symbols:
+    has_symbol_overrides = bool(
+        cli_crypto_symbols or cli_stock_symbols or env_crypto_symbols or env_stock_symbols
+    )
+    if has_symbol_overrides:
         groups = []
     if not groups:
         if crypto_symbols:
@@ -275,5 +309,8 @@ def load_settings(
         crypto_symbols=crypto_symbols,
         stock_symbols=stock_symbols,
         timezone=timezone,
+        language=language,
         groups=groups,
+        config_path=str(path),
+        symbols_from_config=not has_symbol_overrides,
     )
