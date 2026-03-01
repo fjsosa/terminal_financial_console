@@ -16,7 +16,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, RichLog, Static
@@ -86,17 +86,27 @@ class Candle:
 
 
 class ChartModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "close_modal", show=False),
+        Binding("enter", "close_modal", show=False),
+        Binding("q", "close_modal", show=False),
+        Binding("t", "toggle_timeframe", show=False),
+    ]
+
     DEFAULT_CSS = """
     ChartModal {
         align: center middle;
         background: rgba(1, 5, 9, 0.85);
     }
-    #chart_box {
+    #chart_scroll {
         width: 96%;
         height: 92%;
         border: round #2ec4b6;
         background: #060d15;
         padding: 1 2;
+    }
+    #chart_box {
+        width: 1fr;
     }
     """
 
@@ -107,22 +117,49 @@ class ChartModal(ModalScreen[None]):
         self.timeframe = "15m"
 
     def compose(self) -> ComposeResult:
-        yield Static("Loading chart...", id="chart_box")
+        with VerticalScroll(id="chart_scroll"):
+            yield Static("Loading chart...", id="chart_box")
 
     async def on_mount(self) -> None:
         self._refresh_chart()
+        self.query_one("#chart_scroll", VerticalScroll).focus()
         self.set_interval(1.0, self._refresh_chart)
 
     def _refresh_chart(self) -> None:
         self.query_one("#chart_box", Static).update(self.chart_builder(self.timeframe))
 
+    def action_close_modal(self) -> None:
+        self.dismiss(None)
+
+    def action_toggle_timeframe(self) -> None:
+        self.timeframe = "1h" if self.timeframe == "15m" else "15m"
+        self._refresh_chart()
+
     async def on_key(self, event: events.Key) -> None:
-        if event.key == "t":
-            self.timeframe = "1h" if self.timeframe == "15m" else "15m"
-            self._refresh_chart()
+        scroller = self.query_one("#chart_scroll", VerticalScroll)
+        if event.key in {"down", "j"}:
+            scroller.scroll_down(animate=False)
+            event.stop()
             return
-        if event.key in {"escape", "enter", "q"}:
-            self.dismiss(None)
+        if event.key in {"up", "k"}:
+            scroller.scroll_up(animate=False)
+            event.stop()
+            return
+        if event.key == "pagedown":
+            scroller.scroll_page_down(animate=False)
+            event.stop()
+            return
+        if event.key == "pageup":
+            scroller.scroll_page_up(animate=False)
+            event.stop()
+            return
+        if event.key == "home":
+            scroller.scroll_home(animate=False)
+            event.stop()
+            return
+        if event.key == "end":
+            scroller.scroll_end(animate=False)
+            event.stop()
 
 
 class BootModal(ModalScreen[None]):
@@ -469,6 +506,9 @@ class NeonQuotesApp(App[None]):
         self._schedule_news_refresh()
 
     def action_quick_quit(self) -> None:
+        if isinstance(self.screen, ChartModal):
+            self.screen.dismiss(None)
+            return
         if not self.command_mode:
             self.exit()
 
@@ -485,6 +525,9 @@ class NeonQuotesApp(App[None]):
             self._enter_command_mode()
 
     def action_exit_command_mode(self) -> None:
+        if isinstance(self.screen, ChartModal):
+            self.screen.dismiss(None)
+            return
         if self.command_mode:
             self._exit_command_mode()
 
@@ -494,6 +537,9 @@ class NeonQuotesApp(App[None]):
         )
 
     def action_open_chart(self) -> None:
+        if isinstance(self.screen, ChartModal):
+            self.screen.dismiss(None)
+            return
         news_table = self.query_one("#news_table", DataTable)
         stock_table = self.query_one("#stock_quotes", DataTable)
         crypto_table = self.query_one("#crypto_quotes", DataTable)
@@ -1044,13 +1090,15 @@ class NeonQuotesApp(App[None]):
         chart.append(f"timeframe: {timeframe.upper()}   toggle: [t]   close: [Esc]/[Enter]/[q]\n\n", style="#6f8aa8")
 
         if len(candles_for_tf) >= 2:
-            chart.append(f"{timeframe.upper()} candles\n", style="bold #2ec4b6")
+            chart.append("Chart 1: Candlestick view\n", style="bold #2ec4b6")
+            chart.append(f"{timeframe.upper()} OHLC candles\n", style="#7fd7cb")
             chart.append_text(self._render_candlestick_chart(candles_for_tf, width=96, height=16))
             chart.append("\n")
 
         if len(values) >= 2:
             lo = min(values)
             hi = max(values)
+            chart.append("Chart 2: Live updates\n", style="bold #58b6ff")
             chart.append(
                 f"tick trend min: {lo:,.4f}   max: {hi:,.4f}   points: {len(values)}\n",
                 style="#8ad9ff",
@@ -1270,6 +1318,14 @@ class NeonQuotesApp(App[None]):
         table.move_cursor(row=row_index)
 
     async def on_key(self, event: events.Key) -> None:
+        if isinstance(self.screen, ChartModal):
+            if event.key in {"escape", "enter", "q"}:
+                self.screen.dismiss(None)
+                event.stop()
+                return
+            # While chart modal is open, global shortcuts must not affect the app.
+            return
+
         if self.command_mode:
             if event.key == "escape":
                 self._exit_command_mode()
