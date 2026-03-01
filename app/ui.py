@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 from zoneinfo import ZoneInfo
 
@@ -61,7 +63,9 @@ ALERTS_TABLE_SIZE = 15
 STOCK_TREND_UP_COLOR = "#00ffae"
 STOCK_TREND_DOWN_COLOR = "#ff5e7a"
 TICKER_MODE_SECONDS = 60
+NEWS_MODE_SECONDS = 180
 NEWS_TICKER_LIMIT = 10
+NEWS_TICKER_HEADLINE_MAX = 110
 
 AGE_TOKEN_RE = re.compile(
     r"^(?P<num>\d+)\s*(?P<unit>min|mins|minute|minutes|hour|hours|day|days)$",
@@ -323,12 +327,88 @@ class BootModal(ModalScreen[None]):
         self.query_one("#boot_box", Static).update(txt)
 
 
+class ReadmeModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "close_modal", show=False),
+        Binding("enter", "close_modal", show=False),
+        Binding("q", "close_modal", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    ReadmeModal {
+        align: center middle;
+        background: rgba(1, 5, 9, 0.85);
+    }
+    #help_scroll {
+        width: 96%;
+        height: 92%;
+        border: round #2ec4b6;
+        background: #060d15;
+        padding: 1 2;
+    }
+    #help_box {
+        width: 1fr;
+    }
+    """
+
+    def __init__(self, readme_text: str) -> None:
+        super().__init__()
+        self.readme_text = readme_text
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="help_scroll"):
+            yield Static(self.readme_text, id="help_box")
+
+    async def on_mount(self) -> None:
+        self.query_one("#help_scroll", VerticalScroll).focus()
+
+    def action_close_modal(self) -> None:
+        self.dismiss(None)
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key in {"escape", "enter", "q"}:
+            self.dismiss(None)
+            event.stop()
+            return
+        scroller = self.query_one("#help_scroll", VerticalScroll)
+        if event.key in {"down", "j"}:
+            scroller.scroll_down(animate=False)
+            event.stop()
+            return
+        if event.key in {"up", "k"}:
+            scroller.scroll_up(animate=False)
+            event.stop()
+            return
+        if event.key == "pagedown":
+            scroller.scroll_page_down(animate=False)
+            event.stop()
+            return
+        if event.key == "pageup":
+            scroller.scroll_page_up(animate=False)
+            event.stop()
+            return
+        if event.key == "home":
+            scroller.scroll_home(animate=False)
+            event.stop()
+            return
+        if event.key == "end":
+            scroller.scroll_end(animate=False)
+            event.stop()
+            return
+
+
 class CommandInput(Input):
     async def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
             app = self.app
             if isinstance(app, NeonQuotesApp):
                 app.action_exit_command_mode()
+                event.stop()
+                return
+        if event.key == "tab":
+            app = self.app
+            if isinstance(app, NeonQuotesApp):
+                app.autocomplete_command_input()
                 event.stop()
                 return
         # Let Input handle all other keys through its own internal bindings.
@@ -352,12 +432,17 @@ class NeonQuotesApp(App[None]):
     status_text = reactive("CONNECTING")
     ticker_offset = reactive(0)
 
-    def _build_main_groups(self) -> list[tuple[str, list[tuple[str, str]]]]:
+    def _build_symbol_groups(
+        self,
+        source_groups: Iterable[dict[str, Any]],
+        fallback_name: str = "MAIN",
+        fallback_items: Iterable[tuple[str, str]] | None = None,
+    ) -> list[tuple[str, list[tuple[str, str]]]]:
         groups: list[tuple[str, list[tuple[str, str]]]] = []
-        for group in self.market_groups:
+        for group in source_groups:
             if not isinstance(group, dict):
                 continue
-            name = str(group.get("name") or "MAIN").strip() or "MAIN"
+            name = str(group.get("name") or fallback_name).strip() or fallback_name
             raw_items = group.get("symbols")
             if not isinstance(raw_items, list):
                 continue
@@ -382,16 +467,22 @@ class NeonQuotesApp(App[None]):
 
         if groups:
             return groups
+        fallback_symbols = list(fallback_items or [])
+        if fallback_symbols:
+            return [(fallback_name, fallback_symbols)]
+        return []
+
+    def _build_main_groups(self) -> list[tuple[str, list[tuple[str, str]]]]:
         fallback_symbols: list[tuple[str, str]] = []
         for symbol in self.crypto_symbols:
             fallback_symbols.append((symbol, "crypto"))
         for symbol in self.stock_symbols:
             fallback_symbols.append((symbol, "stock"))
-        if fallback_symbols:
-            return [("MAIN", fallback_symbols)]
-        if self.stock_symbols:
-            return [("MAIN", [(symbol, "stock") for symbol in self.stock_symbols])]
-        return []
+        return self._build_symbol_groups(
+            self.market_groups,
+            fallback_name="MAIN",
+            fallback_items=fallback_symbols,
+        )
 
     def __init__(
         self,
@@ -399,7 +490,10 @@ class NeonQuotesApp(App[None]):
         stock_symbols: Iterable[str] | None = None,
         timezone: str = "",
         language: str = "es",
+        config_name: str = "",
         groups: Iterable[dict[str, Any]] | None = None,
+        indicator_groups: Iterable[dict[str, Any]] | None = None,
+        quick_actions: dict[str, str] | None = None,
         symbol_names: dict[tuple[str, str], str] | None = None,
         config_path: str = "config.yml",
         symbols_from_config: bool = True,
@@ -408,15 +502,35 @@ class NeonQuotesApp(App[None]):
         self.crypto_symbols = list(crypto_symbols or DEFAULT_CRYPTO_SYMBOLS)
         self.stock_symbols = [symbol.upper() for symbol in (stock_symbols or DEFAULT_STOCK_SYMBOLS)]
         self.market_groups = list(groups or [])
+        self.indicator_groups = list(indicator_groups or [])
         self.symbol_names = dict(symbol_names or {})
+        self.quick_actions = {
+            "1": "BTCUSDT",
+            "2": "ETHUSDT",
+            "3": "SOLUSDT",
+        }
+        if quick_actions:
+            for key in ("1", "2", "3"):
+                symbol = str(quick_actions.get(key) or "").strip().upper()
+                if symbol:
+                    self.quick_actions[key] = symbol
         self.config_path = config_path
         self.symbols_from_config = symbols_from_config
         self.timezone = timezone.strip()
         self.language = (language or "es").strip().lower()
+        self.config_name = (config_name or "").strip()
         set_language(self.language)
         self.feed = BinanceTickerFeed([])
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.crypto_symbols}
         self.stock_data = {symbol: StockState(symbol=symbol) for symbol in self.stock_symbols}
+        self.indicator_group_items: list[tuple[str, list[tuple[str, str]]]] = self._build_symbol_groups(
+            self.indicator_groups,
+            fallback_name="INDICATORS",
+        )
+        self.indicator_symbols = sorted(
+            {symbol for _, items in self.indicator_group_items for symbol, _ in items}
+        )
+        self.indicator_data = {symbol: StockState(symbol=symbol) for symbol in self.indicator_symbols}
         self.feed_task: asyncio.Task[None] | None = None
         self.last_tick_ms = 0
         self.focused_symbol: str | None = None
@@ -426,6 +540,11 @@ class NeonQuotesApp(App[None]):
         self.main_group_index = 0
         self.main_visible_items: list[tuple[str, str]] = []
         self.main_row_item_by_index: dict[int, tuple[str, str]] = {}
+        self.indicator_row_keys: list[Any] = []
+        self.indicator_col_keys: dict[str, Any] = {}
+        self.indicator_group_index = 0
+        self.indicator_visible_items: list[tuple[str, str]] = []
+        self.indicator_row_item_by_index: dict[int, tuple[str, str]] = {}
         self.alerts_row_keys: list[Any] = []
         self.alerts_col_keys: dict[str, Any] = {}
         self.alerts_row_item_by_index: dict[int, tuple[str, str]] = {}
@@ -437,9 +556,12 @@ class NeonQuotesApp(App[None]):
         self.news_group_index = 0
         self.news_row_links: dict[int, str] = {}
         self.ticker_mode = "quotes"
+        self.ticker_news_ticks_remaining = 0
         self.main_rotation_pause_until = 0.0
+        self.indicator_rotation_pause_until = 0.0
         self.news_rotation_pause_until = 0.0
         self.stocks_last_update = "never"
+        self.indicators_last_update = "never"
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
             symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.crypto_symbols
@@ -465,6 +587,8 @@ class NeonQuotesApp(App[None]):
         self.is_shutting_down = False
         self.command_mode = False
         self.command_buffer = ""
+        self._tab_cycle_key: tuple[Any, ...] | None = None
+        self._tab_cycle_index: int = -1
         self.status_hint = (
             f":|f2 {tr('Cmd')} | q {tr('quit')} | [enter] {tr('chart')} | "
             f"? {tr('help')} | ⌃P palette"
@@ -476,13 +600,17 @@ class NeonQuotesApp(App[None]):
             with Vertical(id="markets"):
                 yield DataTable(id="crypto_quotes")
                 yield DataTable(id="stock_quotes")
-            with Vertical(id="side"):
                 yield RichLog(id="events", highlight=True, wrap=False, markup=True)
+            with Vertical(id="side"):
+                yield DataTable(id="indicators_table")
                 yield Static(id="news_header")
                 yield DataTable(id="news_table")
         yield Static(id="ticker")
         yield Static(id="status_line")
-        yield CommandInput(placeholder=":q | :r | :n | :?", id="command_input")
+        yield CommandInput(
+            placeholder=":q | :r | :n | :? | :add | :del | :mv | :edit",
+            id="command_input",
+        )
 
     async def on_mount(self) -> None:
         main_table = self.query_one("#crypto_quotes", DataTable)
@@ -537,6 +665,24 @@ class NeonQuotesApp(App[None]):
             self.alerts_row_keys.append(row_key)
         self._update_alerts_panel()
 
+        indicators_table = self.query_one("#indicators_table", DataTable)
+        indicators_table.cursor_type = "row"
+        indicators_table.zebra_stripes = True
+        i_symbol = indicators_table.add_column(tr("Indicator"), width=30)
+        i_change = indicators_table.add_column("24h %", width=9)
+        i_price = indicators_table.add_column(tr("Price"), width=13)
+        self.indicator_col_keys = {
+            "symbol": i_symbol,
+            "change": i_change,
+            "price": i_price,
+        }
+        self.indicator_row_keys.clear()
+        indicator_rows = max(1, max((len(items) for _, items in self.indicator_group_items), default=1))
+        for i in range(indicator_rows):
+            row_key = indicators_table.add_row("-", "-", "-", key=f"indicator_{i}")
+            self.indicator_row_keys.append(row_key)
+        self._update_indicators_panel()
+
         news_table = self.query_one("#news_table", DataTable)
         news_table.cursor_type = "row"
         news_table.zebra_stripes = True
@@ -575,13 +721,16 @@ class NeonQuotesApp(App[None]):
         self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
         self.set_interval(NEWS_GROUP_ROTATE_SECONDS, self._rotate_news_group)
         self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_main_group)
+        self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_indicator_group)
         self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_stock_refresh)
+        self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_indicator_refresh)
         self.startup_task = asyncio.create_task(self._startup_sequence())
 
     def _on_app_theme_changed(self, *_args: Any) -> None:
         # Re-render news metadata colors when theme changes from command palette.
         self._update_news_panel()
         self._update_main_group_panel()
+        self._update_indicators_panel()
         self._update_alerts_panel()
         self._render_status_line()
         self._update_clock()
@@ -644,7 +793,11 @@ class NeonQuotesApp(App[None]):
 
     async def _resolve_names_background(self) -> None:
         try:
-            groups, names, stats = await asyncio.to_thread(resolve_symbol_names, self.market_groups)
+            groups, indicator_groups, names, stats = await asyncio.to_thread(
+                resolve_symbol_names,
+                self.market_groups,
+                self.indicator_groups,
+            )
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -652,6 +805,19 @@ class NeonQuotesApp(App[None]):
             return
 
         self.market_groups = groups
+        self.indicator_groups = indicator_groups
+        self.indicator_group_items = self._build_symbol_groups(
+            self.indicator_groups,
+            fallback_name="INDICATORS",
+        )
+        self.indicator_symbols = sorted(
+            {symbol for _, items in self.indicator_group_items for symbol, _ in items}
+        )
+        for symbol in self.indicator_symbols:
+            self.indicator_data.setdefault(symbol, StockState(symbol=symbol))
+        for symbol in list(self.indicator_data):
+            if symbol not in self.indicator_symbols:
+                self.indicator_data.pop(symbol, None)
         self.symbol_names.update(names)
         save_names_cache(self.symbol_names)
         self._log(
@@ -664,7 +830,12 @@ class NeonQuotesApp(App[None]):
         )
 
         if self.symbols_from_config:
-            updated = await asyncio.to_thread(update_config_group_names, self.config_path, groups)
+            updated = await asyncio.to_thread(
+                update_config_group_names,
+                self.config_path,
+                groups,
+                indicator_groups,
+            )
             if updated:
                 self._log("[#2ec4b6]CONFIG[/] symbol names persisted to config.yml")
             else:
@@ -673,6 +844,7 @@ class NeonQuotesApp(App[None]):
             self._log("[#6f8aa8]CONFIG[/] symbols from CLI/env, names kept in memory")
 
         self._update_main_group_panel()
+        self._update_indicators_panel()
         self._update_alerts_panel()
 
     async def _startup_sequence(self) -> None:
@@ -693,6 +865,7 @@ class NeonQuotesApp(App[None]):
             self.lazy_history_task = self._spawn_background(self._load_remaining_history_in_background())
             self._schedule_news_refresh()
             self._schedule_stock_refresh()
+            self._schedule_indicator_refresh()
 
     def _update_clock(self) -> None:
         palette = self._ui_palette()
@@ -701,8 +874,12 @@ class NeonQuotesApp(App[None]):
         conn_color = "green" if age_ms < 3000 else "yellow" if age_ms < 10000 else "red"
         pulse = "●" if self.heartbeat else "○"
         now = format_time_local(datetime.now(self.local_tz), tzinfo=self.local_tz)
+        config_name = self.config_name or "default"
         header = (
-            f"[bold {palette['ok']}]NEON MARKET TERM[/]  "
+            f"[bold {palette['ok']}]NEON MARKET TERM[/] "
+            f"[{palette['muted']}]|[/] "
+            f"[{palette['brand']}]{config_name}[/] "
+            f"[{palette['muted']}]|[/] "
             f"[{palette['accent']}]{now}[/]  "
             f"[{conn_color}]LINK {pulse} {self.status_text}[/]  "
             f"[{palette['warn']}]latency~{age_ms}ms[/]"
@@ -713,7 +890,16 @@ class NeonQuotesApp(App[None]):
     def _rotate_ticker_mode(self) -> None:
         if self.is_shutting_down:
             return
-        self.ticker_mode = "news" if self.ticker_mode == "quotes" else "quotes"
+        if self.ticker_mode == "quotes":
+            self.ticker_mode = "news"
+            # Current minute in news mode + remaining minute ticks to complete NEWS_MODE_SECONDS.
+            total_news_ticks = max(1, NEWS_MODE_SECONDS // TICKER_MODE_SECONDS)
+            self.ticker_news_ticks_remaining = max(0, total_news_ticks - 1)
+        else:
+            if self.ticker_news_ticks_remaining > 0:
+                self.ticker_news_ticks_remaining -= 1
+            else:
+                self.ticker_mode = "quotes"
         self.ticker_offset = 0
 
     def _alerts_items_for_ticker(self) -> list[tuple[str, str]]:
@@ -743,11 +929,13 @@ class NeonQuotesApp(App[None]):
         return 300000
 
     def _headline_inline(self, item: NewsItem) -> str:
-        source = (item.source or "source").strip()[:20]
-        age = (item.age or "-").strip()[:12]
+        source = (item.source or "source").strip()[:16]
+        age = (item.age or "-").strip()[:10]
         if age.lower() == "now":
             age = f"{age} 🔥"
         title = " ".join((item.title or "").split())
+        if len(title) > NEWS_TICKER_HEADLINE_MAX:
+            title = title[: NEWS_TICKER_HEADLINE_MAX - 1].rstrip() + "…"
         return f"[{source}: {age}] {title}"
 
     def _animate_ticker(self) -> None:
@@ -845,21 +1033,34 @@ class NeonQuotesApp(App[None]):
             self._exit_command_mode()
 
     def action_show_help_tip(self) -> None:
-        self._log(
-            f"[#ffcf5c]{tr('Tip:')}[/] Enter chart on focused table; ':' command mode; commands: :q :r :n :?"
+        self.push_screen(ReadmeModal(self._load_readme_text()))
+
+    def _load_readme_text(self) -> str:
+        readme_path = Path(__file__).resolve().parent.parent / "README.md"
+        header = (
+            "README // Neon Quotes Terminal\n"
+            "Scroll: ↑/↓ PgUp/PgDn Home/End | Close: Esc/Enter/q\n\n"
         )
+        try:
+            content = readme_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return header + f"Could not load README.md: {exc!r}\n"
+        return header + content
 
     def action_open_chart(self) -> None:
         if isinstance(self.screen, ChartModal):
             self.screen.dismiss(None)
             return
         news_table = self.query_one("#news_table", DataTable)
+        indicators_table = self.query_one("#indicators_table", DataTable)
         alerts_table = self.query_one("#stock_quotes", DataTable)
         main_table = self.query_one("#crypto_quotes", DataTable)
         if news_table.has_focus:
             row = news_table.cursor_row
             if row is not None:
                 self._copy_news_link(int(row))
+            return
+        if indicators_table.has_focus:
             return
         if alerts_table.has_focus:
             row = alerts_table.cursor_row
@@ -993,6 +1194,8 @@ class NeonQuotesApp(App[None]):
         if event.data_table.id == "stock_quotes":
             self._open_alert_chart_for_row(event.cursor_row)
             return
+        if event.data_table.id == "indicators_table":
+            return
         if event.data_table.id == "news_table":
             self._copy_news_link(event.cursor_row)
 
@@ -1045,10 +1248,24 @@ class NeonQuotesApp(App[None]):
             self.lazy_history_task.cancel()
         self.lazy_history_task = self._spawn_background(self._load_remaining_history_in_background())
 
+    def _rotate_indicator_group(self) -> None:
+        if self.is_shutting_down:
+            return
+        if not self.indicator_group_items:
+            return
+        if time.time() < self.indicator_rotation_pause_until:
+            return
+        self.indicator_group_index = (self.indicator_group_index + 1) % len(self.indicator_group_items)
+        self._update_indicators_panel()
+        self._schedule_indicator_refresh()
+
     def _pause_group_rotation(self, table_id: str, seconds: int = 60) -> None:
         until = time.time() + seconds
         if table_id == "crypto_quotes":
             self.main_rotation_pause_until = until
+            return
+        if table_id == "indicators_table":
+            self.indicator_rotation_pause_until = until
             return
         if table_id == "news_table":
             self.news_rotation_pause_until = until
@@ -1070,6 +1287,14 @@ class NeonQuotesApp(App[None]):
         self.news_group_index = (self.news_group_index + step) % len(self.news_groups)
         self._pause_group_rotation("news_table", 60)
         self._update_news_panel()
+
+    def _cycle_indicator_group(self, step: int) -> None:
+        if not self.indicator_group_items:
+            return
+        self.indicator_group_index = (self.indicator_group_index + step) % len(self.indicator_group_items)
+        self._pause_group_rotation("indicators_table", 60)
+        self._update_indicators_panel()
+        self._schedule_indicator_refresh()
 
     async def _refresh_crypto_stream_for_visible_group(self) -> None:
         desired = [s for s, t in self.main_visible_items if t == "crypto"]
@@ -1138,6 +1363,68 @@ class NeonQuotesApp(App[None]):
             table.update_cell(row_key, self.main_col_keys["change"], "")
             table.update_cell(row_key, self.main_col_keys["volume"], "")
             table.update_cell(row_key, self.main_col_keys["spark"], "")
+
+    def _update_indicators_panel(self) -> None:
+        table = self.query_one("#indicators_table", DataTable)
+        if not self.indicator_group_items:
+            self.indicator_visible_items = []
+            self.indicator_row_item_by_index.clear()
+            with contextlib.suppress(Exception):
+                table.border_title = (
+                    f" {tr('INDICATORS')} "
+                    f"[{tr('group')} 0/0] "
+                    f"[{tr('updated')} {self.indicators_last_update}] "
+                )
+            for i, row_key in enumerate(self.indicator_row_keys):
+                table.update_cell(row_key, self.indicator_col_keys["symbol"], "-" if i == 0 else "")
+                table.update_cell(row_key, self.indicator_col_keys["change"], "-")
+                table.update_cell(row_key, self.indicator_col_keys["price"], "-")
+            return
+
+        group_name, items = self.indicator_group_items[self.indicator_group_index]
+        sorted_items = sorted(
+            items,
+            key=lambda item: self.indicator_data.get(item[0], StockState(symbol=item[0])).change_percent,
+            reverse=True,
+        )
+        self.indicator_visible_items = sorted_items
+        self.indicator_row_item_by_index.clear()
+        with contextlib.suppress(Exception):
+            table.border_title = (
+                f" {group_name.upper()} "
+                f"[{tr('group')} {self.indicator_group_index + 1}/{len(self.indicator_group_items)}] "
+                f"[{tr('updated')} {self.indicators_last_update}] "
+            )
+
+        for i, row_key in enumerate(self.indicator_row_keys):
+            if i >= len(sorted_items):
+                table.update_cell(row_key, self.indicator_col_keys["symbol"], "")
+                table.update_cell(row_key, self.indicator_col_keys["change"], "")
+                table.update_cell(row_key, self.indicator_col_keys["price"], "")
+                continue
+
+            symbol, symbol_type = sorted_items[i]
+            self.indicator_row_item_by_index[i] = (symbol, symbol_type)
+            state = self.indicator_data.get(symbol)
+            if state is None:
+                state = StockState(symbol=symbol)
+                self.indicator_data[symbol] = state
+            color = self._trend_color(state.change_percent >= 0, symbol_type="stock")
+            table.update_cell(
+                row_key,
+                self.indicator_col_keys["symbol"],
+                self._ticker_label(symbol, symbol_type, max_name_len=25),
+            )
+            table.update_cell(
+                row_key,
+                self.indicator_col_keys["change"],
+                Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}"),
+            )
+            table.update_cell(
+                row_key,
+                self.indicator_col_keys["price"],
+                Text(f"{state.price:>13,.2f}", style=color),
+            )
 
     def _update_alerts_panel(self) -> None:
         table = self.query_one("#stock_quotes", DataTable)
@@ -1389,6 +1676,11 @@ class NeonQuotesApp(App[None]):
             return
         self._spawn_background(self._refresh_stocks())
 
+    def _schedule_indicator_refresh(self) -> None:
+        if self.is_shutting_down:
+            return
+        self._spawn_background(self._refresh_indicators())
+
     async def _refresh_stocks(self) -> None:
         if not self.stock_symbols:
             return
@@ -1409,6 +1701,33 @@ class NeonQuotesApp(App[None]):
             )
         except Exception as exc:
             self._log(f"[yellow]Stocks warning:[/] {exc!r}")
+
+    async def _refresh_indicators(self) -> None:
+        if not self.indicator_symbols:
+            return
+        visible_symbols = [s for s, _ in self.indicator_visible_items]
+        symbols_to_refresh = visible_symbols or self.indicator_symbols
+        if not symbols_to_refresh:
+            return
+        try:
+            quotes = await asyncio.to_thread(fetch_stock_quotes, symbols_to_refresh)
+            for quote in quotes:
+                state = self.indicator_data.get(quote.symbol)
+                if state is None:
+                    state = StockState(symbol=quote.symbol)
+                    self.indicator_data[quote.symbol] = state
+                state.price = quote.price
+                state.change_percent = quote.change_percent
+                state.volume = quote.volume
+                state.last_update_ms = quote.event_time_ms
+            self.indicators_last_update = datetime.now(self.local_tz).strftime("%H:%M")
+            self._update_indicators_panel()
+            self._log(
+                f"[#2ec4b6]{tr('INDICATORS')}[/] refreshed {len(quotes)} symbols "
+                f"({len(symbols_to_refresh)} in active group)"
+            )
+        except Exception as exc:
+            self._log(f"[yellow]{tr('INDICATORS')} warning:[/] {exc!r}")
 
     async def _ensure_crypto_chart_history(
         self, symbol: str, timeframe: str, target_candles: int
@@ -1638,7 +1957,7 @@ class NeonQuotesApp(App[None]):
                         source=source,
                         age=age,
                         title=item.title,
-                        line_len=76,
+                        line_len=72,
                     ),
                 )
             else:
@@ -1650,31 +1969,26 @@ class NeonQuotesApp(App[None]):
         clean_age = (age.strip() or "-")[:12]
         age_lower = clean_age.lower()
         show_fire = age_lower == "now"
-        age_label = f"{clean_age} 🔥" if show_fire else clean_age
-        meta_label = f"[{clean_source}: {age_label}] "
+        words = (title or "").split() or ["-"]
+        per_line = max(12, line_len)
 
-        per_line = max(1, line_len - len(meta_label))
-        words = (title or "").split()
-        if not words:
-            words = ["-"]
-
-        chunks: list[str] = []
+        body_lines: list[str] = []
         current = ""
         for word in words:
             candidate = f"{current} {word}".strip()
             if len(candidate) <= per_line:
                 current = candidate
                 continue
-            chunks.append(current or word[:per_line])
+            body_lines.append(current or word[:per_line])
             current = word if len(word) <= per_line else word[:per_line]
         if current:
-            chunks.append(current)
+            body_lines.append(current)
 
-        while len(chunks) < 3:
-            chunks.append("")
-        if len(chunks) > 3:
-            chunks = chunks[:3]
-            chunks[2] = (chunks[2][: max(0, per_line - 1)] + "…").rstrip()
+        while len(body_lines) < 2:
+            body_lines.append("")
+        if len(body_lines) > 2:
+            body_lines = body_lines[:2]
+            body_lines[1] = (body_lines[1][: max(0, per_line - 1)] + "…").rstrip()
 
         age_style = palette["age_old"]
         if "now" in age_lower:
@@ -1690,13 +2004,12 @@ class NeonQuotesApp(App[None]):
         if show_fire:
             text.append(" ", style=palette["bracket"])
             text.append("🔥", style=palette["fire"])
-        text.append("] ", style=palette["bracket"])
+        text.append("]", style=palette["bracket"])
         body_color = self._ui_palette()["text"]
-        text.append(chunks[0], style=body_color)
         text.append("\n", style=body_color)
-        text.append(chunks[1], style=body_color)
+        text.append(body_lines[0], style=body_color)
         text.append("\n", style=body_color)
-        text.append(chunks[2], style=body_color)
+        text.append(body_lines[1], style=body_color)
         return text
 
     def _news_palette(self) -> dict[str, str]:
@@ -1747,6 +2060,8 @@ class NeonQuotesApp(App[None]):
     def _enter_command_mode(self) -> None:
         self.command_mode = True
         self.command_buffer = ""
+        self._tab_cycle_key = None
+        self._tab_cycle_index = -1
         self._log(f"[{self._ui_palette()['warn']}]COMMAND[/] {tr('COMMAND mode enabled')}")
         command_input = self.query_one("#command_input", Input)
         command_input.display = True
@@ -1757,6 +2072,8 @@ class NeonQuotesApp(App[None]):
     def _exit_command_mode(self) -> None:
         self.command_mode = False
         self.command_buffer = ""
+        self._tab_cycle_key = None
+        self._tab_cycle_index = -1
         self._log(f"[{self._ui_palette()['warn']}]COMMAND[/] {tr('COMMAND mode disabled')}")
         command_input = self.query_one("#command_input", Input)
         command_input.value = ""
@@ -1771,7 +2088,8 @@ class NeonQuotesApp(App[None]):
         if self.command_mode:
             left = (
                 f":{self.command_buffer}█ | [Enter] {tr('run')} | [Esc] {tr('normal')} | "
-                f"q {tr('quit')} | r {tr('reset')} | n {tr('news')} | ? {tr('help')}"
+                f"q {tr('quit')} | r {tr('reset')} | n {tr('news')} | ? {tr('help')} | "
+                "add/del/mv/edit"
             )
             right = tr("status: enter command")
             right_style = palette["warn"]
@@ -1794,10 +2112,503 @@ class NeonQuotesApp(App[None]):
         txt.append(right, style=f"bold {right_style}")
         line.update(txt)
 
-    def _execute_command(self, command: str) -> None:
-        cmd = command.strip().lower()
-        if not cmd:
+    @staticmethod
+    def _quote_token(value: str) -> str:
+        if not value:
+            return value
+        if any(ch.isspace() for ch in value):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        return value
+
+    @staticmethod
+    def _token_starts_with(candidate: str, partial: str) -> bool:
+        raw = candidate.strip()
+        normalized = raw.strip('"').strip("'")
+        probe = (partial or "").strip()
+        if not probe:
+            return True
+        cf = probe.casefold()
+        return raw.casefold().startswith(cf) or normalized.casefold().startswith(cf)
+
+    @staticmethod
+    def _token_equals(candidate: str, partial: str) -> bool:
+        raw = candidate.strip()
+        normalized = raw.strip('"').strip("'")
+        probe = (partial or "").strip()
+        if not probe:
+            return False
+        cf = probe.casefold()
+        return raw.casefold() == cf or normalized.casefold() == cf
+
+    def _command_slot_candidates(self, committed: list[str]) -> list[str]:
+        commands = ["q", "r", "n", "?", "add", "del", "mv", "edit"]
+        if not committed:
+            return commands
+        cmd = committed[0].lower()
+        target_index = len(committed)
+        if cmd in {"del", "mv", "edit"} and target_index == 1:
+            return self._all_configured_symbols()
+        if cmd == "add" and target_index == 2:
+            return ["crypto", "stock"]
+        if cmd in {"add", "mv"} and target_index == 2 + (1 if cmd == "add" else 0):
+            groups = [self._quote_token(str(g.get("name") or "").strip()) for g in self.market_groups]
+            return [g for g in groups if g]
+        if cmd == "edit" and target_index >= 2:
+            return ["group=", "type=", "name="]
+        return []
+
+    def _all_configured_symbols(self) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for _, items in self.main_group_items:
+            for symbol, _ in items:
+                if symbol not in seen:
+                    seen.add(symbol)
+                    out.append(symbol)
+        return out
+
+    def _command_completion_candidates(
+        self,
+        committed: list[str],
+        current_partial: str,
+    ) -> list[str]:
+        slot = self._command_slot_candidates(committed)
+        return [value for value in slot if self._token_starts_with(value, current_partial)]
+
+    def autocomplete_command_input(self) -> None:
+        if not self.command_mode:
             return
+        command_input = self.query_one("#command_input", Input)
+        raw_value = command_input.value or ""
+        if raw_value.startswith(":"):
+            raw_value = raw_value[1:]
+        ends_space = bool(raw_value) and raw_value[-1].isspace()
+        try:
+            tokens = shlex.split(raw_value)
+        except ValueError:
+            tokens = raw_value.split()
+        current_partial = ""
+        committed = list(tokens)
+        if not ends_space and tokens:
+            current_partial = tokens[-1]
+            committed = tokens[:-1]
+
+        slot_candidates = self._command_slot_candidates(committed)
+        filtered_candidates = [c for c in slot_candidates if self._token_starts_with(c, current_partial)]
+        if (
+            len(slot_candidates) > 1
+            and current_partial
+            and any(self._token_equals(c, current_partial) for c in slot_candidates)
+        ):
+            candidates = slot_candidates
+        else:
+            candidates = filtered_candidates
+
+        if not candidates:
+            self._log("[#6f8aa8]COMMAND[/] no completion candidates")
+            self._tab_cycle_key = None
+            self._tab_cycle_index = -1
+            return
+
+        next_token = ""
+        add_trailing_space = False
+        if len(candidates) == 1:
+            next_token = candidates[0]
+            add_trailing_space = True
+            self._tab_cycle_key = None
+            self._tab_cycle_index = -1
+        else:
+            cycle_key = (tuple(committed), tuple(candidates))
+            if self._tab_cycle_key == cycle_key:
+                idx = (self._tab_cycle_index + 1) % len(candidates)
+            else:
+                idx = 0
+                for i, cand in enumerate(candidates):
+                    if self._token_equals(cand, current_partial):
+                        idx = (i + 1) % len(candidates)
+                        break
+            self._tab_cycle_key = cycle_key
+            self._tab_cycle_index = idx
+            next_token = candidates[idx]
+            preview = ", ".join(candidates[:8])
+            if len(candidates) > 8:
+                preview += ", …"
+            self._log(f"[#6f8aa8]COMMAND[/] suggestions: {preview}")
+
+        rebuilt = list(committed)
+        rebuilt.append(next_token)
+        suffix = " " if add_trailing_space else ""
+        command_input.value = ":" + " ".join(rebuilt) + suffix
+        self.command_buffer = command_input.value[1:]
+        self._render_status_line()
+
+    @staticmethod
+    def _normalize_symbol_type(symbol: str, symbol_type: str) -> str:
+        st = (symbol_type or "").strip().lower()
+        if st in {"crypto", "stock"}:
+            return st
+        return "crypto" if symbol.upper().endswith("USDT") else "stock"
+
+    def _find_group_index(self, group_name: str) -> int | None:
+        wanted = (group_name or "").strip().casefold()
+        if not wanted:
+            return None
+        for idx, group in enumerate(self.market_groups):
+            name = str(group.get("name") or "").strip().casefold()
+            if name == wanted:
+                return idx
+        return None
+
+    def _find_symbol_entry(self, symbol: str) -> tuple[int, int, dict[str, Any]] | None:
+        needle = (symbol or "").strip().upper()
+        if not needle:
+            return None
+        for group_idx, group in enumerate(self.market_groups):
+            symbols = group.get("symbols")
+            if not isinstance(symbols, list):
+                continue
+            for item_idx, item in enumerate(symbols):
+                if not isinstance(item, dict):
+                    continue
+                value = str(item.get("symbol") or "").strip().upper()
+                if value == needle:
+                    return group_idx, item_idx, item
+        return None
+
+    def _yaml_quote(self, value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _serialize_config_yaml(self) -> str:
+        lines: list[str] = []
+        lines.append(f"config_name: {self._yaml_quote(self.config_name)}")
+        lines.append(f"timezone: {self._yaml_quote(self.timezone)}")
+        lines.append(f"language: {self._yaml_quote(self.language)}")
+        lines.append("quick_actions:")
+        for key in ("1", "2", "3"):
+            value = str(self.quick_actions.get(key) or "").strip()
+            lines.append(f"  {self._yaml_quote(key)}: {self._yaml_quote(value)}")
+
+        lines.append("indicator_groups:")
+        for group in self.indicator_groups:
+            name = str(group.get("name") or "").strip()
+            lines.append(f"- name: {self._yaml_quote(name)}")
+            lines.append("  symbols:")
+            for item in group.get("symbols", []):
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").strip().upper()
+                symbol_type = self._normalize_symbol_type(symbol, str(item.get("type") or "stock"))
+                if not symbol:
+                    continue
+                lines.append(f"  - symbol: {self._yaml_quote(symbol)}")
+                lines.append(f"    type: {self._yaml_quote(symbol_type)}")
+                name_value = str(item.get("name") or "").strip()
+                if name_value:
+                    lines.append(f"    name: {self._yaml_quote(name_value)}")
+
+        lines.append("groups:")
+        for group in self.market_groups:
+            name = str(group.get("name") or "").strip()
+            lines.append(f"- name: {self._yaml_quote(name)}")
+            lines.append("  symbols:")
+            for item in group.get("symbols", []):
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").strip().upper()
+                symbol_type = self._normalize_symbol_type(symbol, str(item.get("type") or "stock"))
+                if not symbol:
+                    continue
+                lines.append(f"  - symbol: {self._yaml_quote(symbol)}")
+                lines.append(f"    type: {self._yaml_quote(symbol_type)}")
+                name_value = str(item.get("name") or "").strip()
+                if name_value:
+                    lines.append(f"    name: {self._yaml_quote(name_value)}")
+        return "\n".join(lines) + "\n"
+
+    def _persist_config(self) -> bool:
+        path = Path(self.config_path)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        payload = self._serialize_config_yaml()
+        try:
+            tmp_path.write_text(payload, encoding="utf-8")
+            tmp_path.replace(path)
+            return True
+        except Exception:
+            with contextlib.suppress(Exception):
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            return False
+
+    def _ensure_main_row_capacity(self, required_rows: int) -> None:
+        table = self.query_one("#crypto_quotes", DataTable)
+        while len(self.main_row_keys) < required_rows:
+            idx = len(self.main_row_keys)
+            row_key = table.add_row("-", "-", "-", "-", "-", "", key=f"main_{idx}")
+            self.main_row_keys.append(row_key)
+
+    def _sync_market_data_structures(self) -> None:
+        crypto_symbols: list[str] = []
+        stock_symbols: list[str] = []
+        seen_crypto: set[str] = set()
+        seen_stock: set[str] = set()
+        for _, items in self.main_group_items:
+            for symbol, symbol_type in items:
+                if symbol_type == "crypto":
+                    if symbol not in seen_crypto:
+                        seen_crypto.add(symbol)
+                        crypto_symbols.append(symbol)
+                else:
+                    if symbol not in seen_stock:
+                        seen_stock.add(symbol)
+                        stock_symbols.append(symbol)
+
+        self.crypto_symbols = crypto_symbols
+        self.stock_symbols = stock_symbols
+
+        for symbol in self.crypto_symbols:
+            self.symbol_data.setdefault(symbol, SymbolState(symbol=symbol))
+            self.candles.setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
+            for tf in self.crypto_candles_by_tf:
+                self.crypto_candles_by_tf[tf].setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
+        for symbol in list(self.symbol_data):
+            if symbol not in seen_crypto:
+                self.symbol_data.pop(symbol, None)
+                self.candles.pop(symbol, None)
+                for tf in self.crypto_candles_by_tf:
+                    self.crypto_candles_by_tf[tf].pop(symbol, None)
+
+        for symbol in self.stock_symbols:
+            self.stock_data.setdefault(symbol, StockState(symbol=symbol))
+            self.stock_candles.setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
+            for tf in self.stock_candles_by_tf:
+                self.stock_candles_by_tf[tf].setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
+        for symbol in list(self.stock_data):
+            if symbol not in seen_stock:
+                self.stock_data.pop(symbol, None)
+                self.stock_candles.pop(symbol, None)
+                for tf in self.stock_candles_by_tf:
+                    self.stock_candles_by_tf[tf].pop(symbol, None)
+
+    def _apply_market_groups_change(self, resolve_missing_names: bool = False) -> None:
+        self.main_group_items = self._build_main_groups()
+        self._sync_market_data_structures()
+        if self.main_group_items:
+            self.main_group_index %= len(self.main_group_items)
+            required = max(1, max(len(items) for _, items in self.main_group_items))
+        else:
+            self.main_group_index = 0
+            required = 1
+        self._ensure_main_row_capacity(required)
+        self._update_main_group_panel()
+        self._update_alerts_panel()
+        self._spawn_background(self._refresh_crypto_stream_for_visible_group())
+        self._schedule_stock_refresh()
+        if resolve_missing_names:
+            if self.name_resolve_task and not self.name_resolve_task.done():
+                self.name_resolve_task.cancel()
+            self.name_resolve_task = self._spawn_background(self._resolve_names_background())
+
+    def _clear_quick_actions_for_symbol(self, symbol: str) -> None:
+        removed: list[str] = []
+        for key in ("1", "2", "3"):
+            if self.quick_actions.get(key, "").upper() == symbol.upper():
+                self.quick_actions[key] = ""
+                removed.append(key)
+        if removed:
+            self._log(
+                f"[#ffcf5c]CONFIG[/] quick actions cleared for {symbol}: "
+                f"{', '.join(removed)}"
+            )
+
+    def _cmd_add_symbol(self, tokens: list[str]) -> None:
+        if len(tokens) < 4:
+            self._log("[yellow]Usage:[/] :add <symbol> <crypto|stock> <group> [name]")
+            return
+        symbol = tokens[1].strip().upper()
+        symbol_type = self._normalize_symbol_type(symbol, tokens[2])
+        group_name = tokens[3].strip()
+        name = " ".join(tokens[4:]).strip()
+        if symbol_type not in {"crypto", "stock"}:
+            self._log("[yellow]Add failed:[/] type must be crypto or stock")
+            return
+        if not symbol or not group_name:
+            self._log("[yellow]Add failed:[/] symbol and group are required")
+            return
+        if self._find_symbol_entry(symbol):
+            self._log(f"[yellow]Add failed:[/] symbol already exists: {symbol}")
+            return
+        group_idx = self._find_group_index(group_name)
+        if group_idx is None:
+            self._log(f"[yellow]Add failed:[/] group not found: {group_name}")
+            return
+        item: dict[str, str] = {"symbol": symbol, "type": symbol_type}
+        if name:
+            item["name"] = name
+            self.symbol_names[(symbol, symbol_type)] = name
+        symbols = self.market_groups[group_idx].setdefault("symbols", [])
+        if not isinstance(symbols, list):
+            self._log(f"[yellow]Add failed:[/] invalid group schema: {group_name}")
+            return
+        symbols.append(item)
+        self._apply_market_groups_change(resolve_missing_names=not bool(name))
+        if not self._persist_config():
+            self._log("[yellow]Add warning:[/] could not persist config.yml")
+            return
+        self._log(f"[#2ec4b6]CONFIG[/] added {symbol} ({symbol_type}) to group '{group_name}'")
+
+    def _cmd_del_symbol(self, tokens: list[str]) -> None:
+        if len(tokens) != 2:
+            self._log("[yellow]Usage:[/] :del <symbol>")
+            return
+        symbol = tokens[1].strip().upper()
+        found = self._find_symbol_entry(symbol)
+        if not found:
+            self._log(f"[yellow]Delete failed:[/] symbol not found: {symbol}")
+            return
+        group_idx, item_idx, item = found
+        group_name = str(self.market_groups[group_idx].get("name") or "")
+        symbols = self.market_groups[group_idx].get("symbols")
+        if not isinstance(symbols, list):
+            self._log("[yellow]Delete failed:[/] invalid group schema")
+            return
+        item_type = self._normalize_symbol_type(symbol, str(item.get("type") or ""))
+        symbols.pop(item_idx)
+        if not symbols:
+            self.market_groups.pop(group_idx)
+            self._log(f"[#6f8aa8]CONFIG[/] removed empty group '{group_name}'")
+        self.symbol_names.pop((symbol, item_type), None)
+        self._clear_quick_actions_for_symbol(symbol)
+        self._apply_market_groups_change(resolve_missing_names=False)
+        if not self._persist_config():
+            self._log("[yellow]Delete warning:[/] could not persist config.yml")
+            return
+        self._log(f"[#2ec4b6]CONFIG[/] deleted {symbol} from group '{group_name}'")
+
+    def _cmd_move_symbol(self, tokens: list[str]) -> None:
+        if len(tokens) < 3:
+            self._log("[yellow]Usage:[/] :mv <symbol> <group>")
+            return
+        symbol = tokens[1].strip().upper()
+        destination_name = " ".join(tokens[2:]).strip()
+        found = self._find_symbol_entry(symbol)
+        if not found:
+            self._log(f"[yellow]Move failed:[/] symbol not found: {symbol}")
+            return
+        from_group_idx, item_idx, item = found
+        to_group_idx = self._find_group_index(destination_name)
+        if to_group_idx is None:
+            self._log(f"[yellow]Move failed:[/] destination group not found: {destination_name}")
+            return
+        if to_group_idx == from_group_idx:
+            self._log(f"[#6f8aa8]CONFIG[/] {symbol} already in group '{destination_name}'")
+            return
+
+        source_name = str(self.market_groups[from_group_idx].get("name") or "")
+        symbols_src = self.market_groups[from_group_idx].get("symbols")
+        symbols_dst = self.market_groups[to_group_idx].setdefault("symbols", [])
+        if not isinstance(symbols_src, list) or not isinstance(symbols_dst, list):
+            self._log("[yellow]Move failed:[/] invalid group schema")
+            return
+        moved = dict(item)
+        symbols_src.pop(item_idx)
+        symbols_dst.append(moved)
+        if not symbols_src:
+            if from_group_idx < to_group_idx:
+                to_group_idx -= 1
+            self.market_groups.pop(from_group_idx)
+            self._log(f"[#6f8aa8]CONFIG[/] removed empty group '{source_name}'")
+        self._apply_market_groups_change(resolve_missing_names=False)
+        if not self._persist_config():
+            self._log("[yellow]Move warning:[/] could not persist config.yml")
+            return
+        self._log(
+            f"[#2ec4b6]CONFIG[/] moved {symbol} from '{source_name}' to '{destination_name}'"
+        )
+
+    def _cmd_edit_symbol(self, tokens: list[str]) -> None:
+        if len(tokens) < 3:
+            self._log("[yellow]Usage:[/] :edit <symbol> group=<name> type=<crypto|stock> name=<label>")
+            return
+        symbol = tokens[1].strip().upper()
+        found = self._find_symbol_entry(symbol)
+        if not found:
+            self._log(f"[yellow]Edit failed:[/] symbol not found: {symbol}")
+            return
+        group_idx, item_idx, item = found
+        updates: dict[str, str] = {}
+        for part in tokens[2:]:
+            if "=" not in part:
+                self._log(f"[yellow]Edit failed:[/] invalid token '{part}', expected key=value")
+                return
+            key, value = part.split("=", 1)
+            k = key.strip().lower()
+            v = value.strip()
+            if k not in {"group", "type", "name"}:
+                self._log(f"[yellow]Edit failed:[/] unsupported field '{k}'")
+                return
+            updates[k] = v
+        destination_group = updates.get("group")
+        if destination_group:
+            dest_idx = self._find_group_index(destination_group)
+            if dest_idx is None:
+                self._log(f"[yellow]Edit failed:[/] group not found: {destination_group}")
+                return
+        new_type = updates.get("type")
+        if new_type and self._normalize_symbol_type(symbol, new_type) not in {"crypto", "stock"}:
+            self._log("[yellow]Edit failed:[/] type must be crypto or stock")
+            return
+
+        resolve_names = False
+        if "type" in updates:
+            normalized = self._normalize_symbol_type(symbol, updates["type"])
+            item["type"] = normalized
+        if "name" in updates:
+            name_value = updates["name"].strip()
+            if name_value:
+                item["name"] = name_value
+                self.symbol_names[(symbol, self._normalize_symbol_type(symbol, str(item.get('type') or '')))] = name_value
+            else:
+                item.pop("name", None)
+                resolve_names = True
+
+        if destination_group:
+            dest_idx = self._find_group_index(destination_group)
+            assert dest_idx is not None
+            if dest_idx != group_idx:
+                src_symbols = self.market_groups[group_idx].get("symbols")
+                dst_symbols = self.market_groups[dest_idx].setdefault("symbols", [])
+                if not isinstance(src_symbols, list) or not isinstance(dst_symbols, list):
+                    self._log("[yellow]Edit failed:[/] invalid group schema")
+                    return
+                moved = dict(item)
+                src_symbols.pop(item_idx)
+                dst_symbols.append(moved)
+                if not src_symbols:
+                    if group_idx < dest_idx:
+                        dest_idx -= 1
+                    self.market_groups.pop(group_idx)
+
+        self._apply_market_groups_change(resolve_missing_names=resolve_names)
+        if not self._persist_config():
+            self._log("[yellow]Edit warning:[/] could not persist config.yml")
+            return
+        self._log(f"[#2ec4b6]CONFIG[/] updated {symbol}")
+
+    def _execute_command(self, command: str) -> None:
+        raw = command.strip()
+        if not raw:
+            return
+        try:
+            tokens = shlex.split(raw)
+        except ValueError as exc:
+            self._log(f"[yellow]Command parse error:[/] {exc}")
+            return
+        if not tokens:
+            return
+
+        cmd = tokens[0].lower()
         if cmd == "q":
             self.exit()
             return
@@ -1808,9 +2619,21 @@ class NeonQuotesApp(App[None]):
             self.action_refresh_news()
             return
         if cmd == "?":
-            self._log(f"[{self._ui_palette()['warn']}]{tr('Commands:')}[/] :q :r :n :?")
+            self.push_screen(ReadmeModal(self._load_readme_text()))
             return
-        self._log(f"[yellow]Command unknown:[/] :{cmd}")
+        if cmd == "add":
+            self._cmd_add_symbol(tokens)
+            return
+        if cmd == "del":
+            self._cmd_del_symbol(tokens)
+            return
+        if cmd == "mv":
+            self._cmd_move_symbol(tokens)
+            return
+        if cmd == "edit":
+            self._cmd_edit_symbol(tokens)
+            return
+        self._log(f"[yellow]Command unknown:[/] :{raw}")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command_input":
@@ -1824,6 +2647,8 @@ class NeonQuotesApp(App[None]):
             return
         self._execute_command(raw)
         event.input.value = ""
+        self._tab_cycle_key = None
+        self._tab_cycle_index = -1
         self._exit_command_mode()
 
     async def on_input_changed(self, event: Input.Changed) -> None:
@@ -1833,6 +2658,8 @@ class NeonQuotesApp(App[None]):
         if value.startswith(":"):
             value = value[1:]
         self.command_buffer = value
+        self._tab_cycle_key = None
+        self._tab_cycle_index = -1
         if self.command_mode:
             self._render_status_line()
 
@@ -1935,14 +2762,14 @@ class NeonQuotesApp(App[None]):
     def _refresh_stock_row(self, state: StockState) -> None:
         self._refresh_main_row(state.symbol, "stock")
 
-    def _ticker_label(self, symbol: str, symbol_type: str) -> Text:
+    def _ticker_label(self, symbol: str, symbol_type: str, max_name_len: int = 20) -> Text:
         name = self.symbol_names.get((symbol, symbol_type), "").strip()
         palette = self._ui_palette()
         label = Text(symbol, style=palette["text"])
         if not name:
             return label
         label.append(":", style=palette["muted"])
-        label.append(name[:20], style=palette["accent"])
+        label.append(name[:max_name_len], style=palette["accent"])
         return label
 
     def _format_volume(self, volume: float, width: int = 17) -> str:
@@ -2266,27 +3093,101 @@ class NeonQuotesApp(App[None]):
             for tf in self.stock_candles_by_tf:
                 self.stock_candles_by_tf[tf][symbol].clear()
             self._refresh_main_row(symbol, "stock")
+        for symbol in self.indicator_symbols:
+            self.indicator_data[symbol] = StockState(symbol=symbol)
         self._update_main_group_panel()
+        self._update_indicators_panel()
         self._update_alerts_panel()
         self._log("[cyan]Local buffers reset[/]")
 
     def action_focus_symbol(self, symbol: str) -> None:
-        if symbol not in self.symbol_data:
+        symbol = (symbol or "").strip().upper()
+        if not symbol:
             return
+
+        symbol_type = ""
+        in_indicator_groups = False
+        if symbol in self.symbol_data:
+            symbol_type = "crypto"
+        elif symbol in self.stock_data:
+            symbol_type = "stock"
+        elif symbol in self.indicator_data:
+            symbol_type = "stock"
+            in_indicator_groups = True
+        else:
+            for _, items in self.main_group_items:
+                for item_symbol, item_type in items:
+                    if item_symbol == symbol:
+                        symbol_type = item_type
+                        break
+                if symbol_type:
+                    break
+            if not symbol_type:
+                for _, items in self.indicator_group_items:
+                    for item_symbol, item_type in items:
+                        if item_symbol == symbol:
+                            symbol_type = item_type
+                            in_indicator_groups = True
+                            break
+                    if symbol_type:
+                        break
+        if symbol_type not in {"crypto", "stock"}:
+            self._log(f"[yellow]Quick action:[/] symbol {symbol} not found in configured groups")
+            return
+
         self.focused_symbol = symbol
-        state = self.symbol_data[symbol]
-        self._log(
-            f"[bold #99e2ff]{symbol}[/] "
-            f"price={state.price:,.4f} change={state.change_percent:+.2f}% volume={state.volume:,.2f}"
-        )
+        if symbol_type == "crypto":
+            state = self.symbol_data.get(symbol)
+            for i, (_, items) in enumerate(self.main_group_items):
+                if (symbol, symbol_type) in items:
+                    self.main_group_index = i
+                    self._pause_group_rotation("crypto_quotes", 60)
+                    self._update_main_group_panel()
+                    break
+        else:
+            state = self.indicator_data.get(symbol) if in_indicator_groups else self.stock_data.get(symbol)
+            target_table_id = "#indicators_table" if in_indicator_groups else "#crypto_quotes"
+            target_items = self.indicator_row_item_by_index if in_indicator_groups else self.main_row_item_by_index
+            if in_indicator_groups:
+                for i, (_, items) in enumerate(self.indicator_group_items):
+                    if (symbol, symbol_type) in items:
+                        self.indicator_group_index = i
+                        self._pause_group_rotation("indicators_table", 60)
+                        self._update_indicators_panel()
+                        break
+            else:
+                for i, (_, items) in enumerate(self.main_group_items):
+                    if (symbol, symbol_type) in items:
+                        self.main_group_index = i
+                        self._pause_group_rotation("crypto_quotes", 60)
+                        self._update_main_group_panel()
+                        break
+
+            if state is not None:
+                self._log(
+                    f"[bold #99e2ff]{symbol}[/] "
+                    f"price={state.price:,.4f} change={state.change_percent:+.2f}% volume={state.volume:,.2f}"
+                )
+            table = self.query_one(target_table_id, DataTable)
+            for row_index, item in target_items.items():
+                if item == (symbol, symbol_type):
+                    table.move_cursor(row=row_index)
+                    break
+            return
+        if state is not None:
+            self._log(
+                f"[bold #99e2ff]{symbol}[/] "
+                f"price={state.price:,.4f} change={state.change_percent:+.2f}% volume={state.volume:,.2f}"
+            )
+
         table = self.query_one("#crypto_quotes", DataTable)
         for row_index, item in self.main_row_item_by_index.items():
-            if item == (symbol, "crypto"):
+            if item == (symbol, symbol_type):
                 table.move_cursor(row=row_index)
                 break
 
     async def on_key(self, event: events.Key) -> None:
-        if isinstance(self.screen, ChartModal):
+        if isinstance(self.screen, (ChartModal, ReadmeModal)):
             if event.key in {"escape", "enter", "q"}:
                 self.screen.dismiss(None)
                 event.stop()
@@ -2295,6 +3196,7 @@ class NeonQuotesApp(App[None]):
             return
 
         main_table = self.query_one("#crypto_quotes", DataTable)
+        indicators_table = self.query_one("#indicators_table", DataTable)
         news_table = self.query_one("#news_table", DataTable)
 
         if main_table.has_focus:
@@ -2321,6 +3223,18 @@ class NeonQuotesApp(App[None]):
                 event.stop()
                 return
 
+        if indicators_table.has_focus:
+            if event.key in {"up", "down", "pageup", "pagedown", "home", "end", "j", "k"}:
+                self._pause_group_rotation("indicators_table", 60)
+            if event.key in {"left", "comma"} or event.character in {"<", ","}:
+                self._cycle_indicator_group(-1)
+                event.stop()
+                return
+            if event.key in {"right", "full_stop", "period"} or event.character in {">", "."}:
+                self._cycle_indicator_group(1)
+                event.stop()
+                return
+
         if self.command_mode:
             if event.key == "escape":
                 self._exit_command_mode()
@@ -2336,14 +3250,10 @@ class NeonQuotesApp(App[None]):
         if event.key == "q":
             self.exit()
             return
-        if event.key == "1":
-            self.action_focus_symbol("BTCUSDT")
-            return
-        if event.key == "2":
-            self.action_focus_symbol("ETHUSDT")
-            return
-        if event.key == "3":
-            self.action_focus_symbol("SOLUSDT")
+        if event.key in {"1", "2", "3"}:
+            target = self.quick_actions.get(event.key)
+            if target:
+                self.action_focus_symbol(target)
             return
         if event.character == "?":
             self.action_show_help_tip()
@@ -2354,7 +3264,10 @@ def run_app(
     stock_symbols: Iterable[str] | None = None,
     timezone: str = "",
     language: str = "es",
+    config_name: str = "",
     groups: Iterable[dict[str, Any]] | None = None,
+    indicator_groups: Iterable[dict[str, Any]] | None = None,
+    quick_actions: dict[str, str] | None = None,
     config_path: str = "config.yml",
     symbols_from_config: bool = True,
 ) -> None:
@@ -2363,7 +3276,10 @@ def run_app(
         stock_symbols=stock_symbols,
         timezone=timezone,
         language=language,
+        config_name=config_name,
         groups=groups,
+        indicator_groups=indicator_groups,
+        quick_actions=quick_actions,
         config_path=config_path,
         symbols_from_config=symbols_from_config,
     ).run()

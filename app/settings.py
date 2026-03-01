@@ -12,7 +12,10 @@ class AppSettings:
     stock_symbols: list[str]
     timezone: str
     language: str
+    config_name: str
     groups: list[dict[str, Any]]
+    indicator_groups: list[dict[str, Any]]
+    quick_actions: dict[str, str]
     config_path: str
     symbols_from_config: bool
 
@@ -26,6 +29,20 @@ def _parse_symbols(raw: str | list[str] | None) -> list[str]:
         normalized = raw.replace(",", " ")
         tokens = [token.strip() for token in normalized.split()]
     return [token.upper() for token in tokens if token]
+
+
+def _parse_quick_actions(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("1", "2", "3"):
+        value = raw.get(key)
+        if value is None:
+            continue
+        symbol = str(value).strip().upper()
+        if symbol:
+            out[key] = symbol
+    return out
 
 
 def _load_yaml_config(path: Path) -> dict:
@@ -44,7 +61,10 @@ def _load_yaml_config(path: Path) -> dict:
     # Fallback parser for minimal compatibility if PyYAML is unavailable.
     data: dict = {}
     data["groups"] = []
+    data["indicator_groups"] = []
     current_list_key = ""
+    in_quick_actions = False
+    current_groups_key = "groups"
     current_group: dict | None = None
     current_symbol_item: dict | None = None
 
@@ -61,23 +81,67 @@ def _load_yaml_config(path: Path) -> dict:
             current_symbol_item = None
             continue
 
-        if stripped.startswith("language:"):
+        if stripped.startswith("config_name:"):
             value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-            data["language"] = value
+            data["config_name"] = value
             current_list_key = ""
             current_group = None
             current_symbol_item = None
             continue
 
+        if stripped.startswith("namespace:"):
+            value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            data["namespace"] = value
+            current_list_key = ""
+            current_group = None
+            current_symbol_item = None
+            continue
+
+        if stripped.startswith("language:"):
+            value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            data["language"] = value
+            current_list_key = ""
+            in_quick_actions = False
+            current_group = None
+            current_symbol_item = None
+            continue
+
+        if stripped == "quick_actions:":
+            data.setdefault("quick_actions", {})
+            current_list_key = ""
+            in_quick_actions = True
+            current_group = None
+            current_symbol_item = None
+            continue
+
+        if in_quick_actions and ":" in stripped and not stripped.startswith("-"):
+            key, value = stripped.split(":", 1)
+            qk = key.strip().strip('"').strip("'")
+            qv = value.strip().strip('"').strip("'")
+            if qk in {"1", "2", "3"} and qv:
+                data["quick_actions"][qk] = qv
+            continue
+
         if stripped in {"symbols:", "crypto_symbols:", "stock_symbols:"}:
             current_list_key = stripped[:-1]
             data.setdefault(current_list_key, [])
+            in_quick_actions = False
             current_group = None
             current_symbol_item = None
             continue
 
         if stripped == "groups:":
             current_list_key = ""
+            in_quick_actions = False
+            current_groups_key = "groups"
+            current_group = None
+            current_symbol_item = None
+            continue
+
+        if stripped == "indicator_groups:":
+            current_list_key = ""
+            in_quick_actions = False
+            current_groups_key = "indicator_groups"
             current_group = None
             current_symbol_item = None
             continue
@@ -91,7 +155,7 @@ def _load_yaml_config(path: Path) -> dict:
         if stripped.startswith("- name:"):
             name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
             current_group = {"name": name, "symbols": []}
-            data["groups"].append(current_group)
+            data[current_groups_key].append(current_group)
             current_symbol_item = None
             continue
 
@@ -117,9 +181,12 @@ def _load_yaml_config(path: Path) -> dict:
 
         if ":" in stripped and not stripped.startswith("-"):
             current_list_key = ""
+            in_quick_actions = False
 
     if not data["groups"]:
         data.pop("groups", None)
+    if not data["indicator_groups"]:
+        data.pop("indicator_groups", None)
     return data
 
 
@@ -227,10 +294,18 @@ def load_settings(
     stock_symbols = list(DEFAULT_STOCK_SYMBOLS)
     timezone = ""
     language = DEFAULT_LANGUAGE
+    config_name = ""
+    quick_actions = {
+        "1": "BTCUSDT",
+        "2": "ETHUSDT",
+        "3": "SOLUSDT",
+    }
     groups: list[dict[str, Any]] = []
+    indicator_groups: list[dict[str, Any]] = []
 
     # 2) config.yml
     groups = _normalize_groups(cfg.get("groups"))
+    indicator_groups = _normalize_groups(cfg.get("indicator_groups"))
     has_groups = len(groups) > 0
     if has_groups:
         crypto_symbols = []
@@ -253,9 +328,15 @@ def load_settings(
     cfg_tz = str(cfg.get("timezone", "")).strip()
     if cfg_tz:
         timezone = cfg_tz
+    cfg_name = str(cfg.get("config_name") or cfg.get("namespace") or "").strip()
+    if cfg_name:
+        config_name = cfg_name
     cfg_lang = str(cfg.get("language", "")).strip().lower()
     if cfg_lang:
         language = cfg_lang
+    cfg_quick_actions = _parse_quick_actions(cfg.get("quick_actions"))
+    if cfg_quick_actions:
+        quick_actions.update(cfg_quick_actions)
 
     # Configuration source is only config.yml (no env/CLI overrides).
     if not groups:
@@ -279,7 +360,10 @@ def load_settings(
         stock_symbols=stock_symbols,
         timezone=timezone,
         language=language,
+        config_name=config_name,
         groups=groups,
+        indicator_groups=indicator_groups,
+        quick_actions=quick_actions,
         config_path=str(path),
         symbols_from_config=True,
     )
