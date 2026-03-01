@@ -16,11 +16,14 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 - Columna ticker en formato `TICKER:NAME` (nombre truncado)
 - Columna tipo compacta (`CRT` para crypto, `STK` para stock)
 - Volumen compacto con sufijo `M` para valores grandes (ej. `150.00M`)
-- Zocalo inferior tipo TV (derecha a izquierda) con 2 modos automaticos:
+- Zocalo inferior tipo TV (derecha a izquierda) con 3 modos automaticos:
   - `quotes`: solo simbolos presentes en la tabla `ALERTAS`
   - `news`: 10 noticias mas nuevas en formato `[fuente: edad] titular`
+  - `calendar`: eventos financieros de hoy y mañana
   - Intercalado de `BREAKING NEWS` con efecto titilante en color de alerta
-  - Rotacion de modo: `quotes` 1 minuto y `news` 3 minutos
+  - Rotacion de modo: `quotes` 1 minuto, `news` 3 minutos, `calendar` 1 minuto
+- Calendario financiero (USA/Argentina/Internacional) configurable por `config.yml`
+- Modal de calendario con comando `:c calendar` (merge de agendas y orden cronologico)
 - Panel de eventos
 - Panel de noticias multi-feed Finviz (v=3, v=4, v=5, v=6 y tabla News) con refresco cada 10 minutos
 - Descarga de las ultimas 21 noticias por cada feed de Finviz
@@ -136,6 +139,22 @@ quick_actions:
   "1": "BTCUSDT"
   "2": "AAPL"
   "3": "^VIX"
+calendars:
+  - name: "USA"
+    source: "forexfactory"
+    region: "USA"
+    enabled: true
+    default_duration_min: 60
+  - name: "ARGENTINA"
+    source: "forexfactory"
+    region: "ARGENTINA"
+    enabled: true
+    default_duration_min: 60
+  - name: "INTERNACIONAL"
+    source: "forexfactory"
+    region: "INTERNACIONAL"
+    enabled: true
+    default_duration_min: 60
 indicator_groups:
   - name: "Indices USA"
     symbols:
@@ -194,6 +213,7 @@ Fuente de configuracion:
 - No se usan variables de entorno ni parametros CLI para sobrescribir simbolos, timezone o idioma.
 - `indicator_groups` define los grupos del panel de indicadores (nombre + lista de simbolos).
 - `config_name` define el nombre global de la configuracion y se muestra en el header superior.
+- `calendars` define una o mas agendas financieras; al iniciar se cargan en background y refrescan cada 1 hora.
 
 ## Resolucion de Nombres de Simbolos
 
@@ -270,6 +290,7 @@ Comandos en modo comando:
 - `:q` salir
 - `:r` reset
 - `:n` refresh news
+- `:c calendar` abrir modal de calendario financiero
 - `:?` abrir panel de ayuda (README)
 - `:add <symbol> <crypto|stock> <group> [name]` agregar ticker a un grupo existente
 - `:del <symbol>` eliminar ticker de su grupo
@@ -303,10 +324,11 @@ Autocompletado en modo comando (`Tab`):
 
 ## Zocalo Inferior
 
-El zocalo rota automaticamente entre 2 modos:
+El zocalo rota automaticamente entre 3 modos:
 
 - `quotes`: muestra precios y variacion de los simbolos en `ALERTAS` durante 1 minuto
 - `news`: muestra titulares recientes y marcador `BREAKING NEWS` intercalado durante 3 minutos
+- `calendar`: muestra eventos financieros proximos de hoy y manana durante 1 minuto
 
 Formato en modo `news`:
 
@@ -323,4 +345,24 @@ Opcional (chart XY avanzado):
 
 - La fuente de mercado es Binance stream publico (`@ticker`), no requiere API key.
 - La tabla de acciones usa Yahoo Finance via `yfinance`, refrescada cada 10 minutos.
+- La app guarda log persistente en `~/.cache/neon_quotes/app.log` (con rotacion simple).
+- Regla de color: los unicos colores fijos son rojo y verde para tendencia/variacion de precios (`up/down`) en cotizaciones.
+- El resto de los colores de UI (labels, headers, alerts, news, calendario, etc.) se toma de la paleta activa del tema (Command Palette `Ctrl+P`).
 - Esta version es un MVP, lista para extender con alertas y multiples proveedores.
+
+## Versionado
+
+La app usa versionado estandar Python con `PEP 440` + `setuptools-scm` (configurado en `pyproject.toml`).
+
+- Fuente de version principal: tags de Git.
+- Formato recomendado de release: `vMAJOR.MINOR.PATCH` (ej: `v1.4.0`).
+- La version se muestra en el header superior: `NEON MARKET TERM vX.Y.Z`.
+
+Flujo sugerido de release:
+
+```bash
+git tag v0.1.0
+git push --tags
+```
+
+Sin tags, la app usa fallback de desarrollo (`git describe` o `0.0.0-dev`).

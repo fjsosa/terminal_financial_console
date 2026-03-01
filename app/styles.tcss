@@ -24,7 +24,7 @@ Screen {
 }
 
 #crypto_quotes {
-    height: 2fr;
+    height: 18;
     margin: 0 0 1 0;
     border: round #14b8a6;
     background: #060c14;
@@ -32,6 +32,7 @@ Screen {
 
 #stock_quotes {
     height: 1fr;
+    margin: 0 0 1 0;
     border: round #ff9f43;
     background: #0d0b08;
 }
@@ -43,11 +44,18 @@ Screen {
 }
 
 #events {
+    height: 8;
+    border: round #1d8aff;
+    background: #070b12;
+    color: #99e2ff;
+}
+
+#indicators_table {
     height: 1fr;
     margin: 0 0 1 0;
     border: round #1d8aff;
     background: #070b12;
-    color: #99e2ff;
+    color: #d7f2ff;
 }
 
 #news_header {
@@ -61,7 +69,7 @@ Screen {
 }
 
 #news_table {
-    height: 1fr;
+    height: 2fr;
     border: round #2ec4b6;
     background: #071019;
     color: #d7f2ff;

@@ -13,6 +13,7 @@ class AppSettings:
     timezone: str
     language: str
     config_name: str
+    calendars: list[dict[str, Any]]
     groups: list[dict[str, Any]]
     indicator_groups: list[dict[str, Any]]
     quick_actions: dict[str, str]
@@ -45,6 +46,32 @@ def _parse_quick_actions(raw: object) -> dict[str, str]:
     return out
 
 
+def _normalize_calendars(raw: object) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or f"Calendar {idx}").strip() or f"Calendar {idx}"
+        source = str(item.get("source") or "forexfactory").strip().lower() or "forexfactory"
+        region = str(item.get("region") or "GLOBAL").strip() or "GLOBAL"
+        enabled = bool(item.get("enabled", True))
+        duration = int(item.get("default_duration_min") or 60)
+        if duration <= 0:
+            duration = 60
+        out.append(
+            {
+                "name": name,
+                "source": source,
+                "region": region,
+                "enabled": enabled,
+                "default_duration_min": duration,
+            }
+        )
+    return out
+
+
 def _load_yaml_config(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -62,6 +89,7 @@ def _load_yaml_config(path: Path) -> dict:
     data: dict = {}
     data["groups"] = []
     data["indicator_groups"] = []
+    data["calendars"] = []
     current_list_key = ""
     in_quick_actions = False
     current_groups_key = "groups"
@@ -146,6 +174,14 @@ def _load_yaml_config(path: Path) -> dict:
             current_symbol_item = None
             continue
 
+        if stripped == "calendars:":
+            current_list_key = ""
+            in_quick_actions = False
+            current_groups_key = "calendars"
+            current_group = None
+            current_symbol_item = None
+            continue
+
         if current_list_key and stripped.startswith("-"):
             value = stripped[1:].strip().strip('"').strip("'")
             if value:
@@ -154,13 +190,41 @@ def _load_yaml_config(path: Path) -> dict:
 
         if stripped.startswith("- name:"):
             name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-            current_group = {"name": name, "symbols": []}
+            if current_groups_key == "calendars":
+                current_group = {"name": name}
+            else:
+                current_group = {"name": name, "symbols": []}
             data[current_groups_key].append(current_group)
             current_symbol_item = None
             continue
 
         if stripped == "symbols:" and current_group is not None:
             current_symbol_item = None
+            continue
+
+        if stripped.startswith("source:") and current_group is not None and current_groups_key == "calendars":
+            current_group["source"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            continue
+
+        if stripped.startswith("region:") and current_group is not None and current_groups_key == "calendars":
+            current_group["region"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            continue
+
+        if stripped.startswith("enabled:") and current_group is not None and current_groups_key == "calendars":
+            raw_enabled = stripped.split(":", 1)[1].strip().strip('"').strip("'").lower()
+            current_group["enabled"] = raw_enabled in {"1", "true", "yes", "on"}
+            continue
+
+        if (
+            stripped.startswith("default_duration_min:")
+            and current_group is not None
+            and current_groups_key == "calendars"
+        ):
+            raw_duration = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            try:
+                current_group["default_duration_min"] = int(raw_duration)
+            except Exception:
+                current_group["default_duration_min"] = 60
             continue
 
         if stripped.startswith("- symbol:") and current_group is not None:
@@ -187,6 +251,8 @@ def _load_yaml_config(path: Path) -> dict:
         data.pop("groups", None)
     if not data["indicator_groups"]:
         data.pop("indicator_groups", None)
+    if not data["calendars"]:
+        data.pop("calendars", None)
     return data
 
 
@@ -300,12 +366,38 @@ def load_settings(
         "2": "ETHUSDT",
         "3": "SOLUSDT",
     }
+    calendars: list[dict[str, Any]] = []
     groups: list[dict[str, Any]] = []
     indicator_groups: list[dict[str, Any]] = []
 
     # 2) config.yml
     groups = _normalize_groups(cfg.get("groups"))
     indicator_groups = _normalize_groups(cfg.get("indicator_groups"))
+    calendars = _normalize_calendars(cfg.get("calendars"))
+    if not calendars:
+        calendars = [
+            {
+                "name": "USA",
+                "source": "forexfactory",
+                "region": "USA",
+                "enabled": True,
+                "default_duration_min": 60,
+            },
+            {
+                "name": "ARGENTINA",
+                "source": "forexfactory",
+                "region": "ARGENTINA",
+                "enabled": True,
+                "default_duration_min": 60,
+            },
+            {
+                "name": "INTERNACIONAL",
+                "source": "forexfactory",
+                "region": "INTERNACIONAL",
+                "enabled": True,
+                "default_duration_min": 60,
+            },
+        ]
     has_groups = len(groups) > 0
     if has_groups:
         crypto_symbols = []
@@ -361,6 +453,7 @@ def load_settings(
         timezone=timezone,
         language=language,
         config_name=config_name,
+        calendars=calendars,
         groups=groups,
         indicator_groups=indicator_groups,
         quick_actions=quick_actions,

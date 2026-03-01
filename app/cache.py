@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,11 @@ from typing import Any
 CACHE_DIR = Path.home() / ".cache" / "neon_quotes"
 HISTORY_DIR = CACHE_DIR / "history"
 NAMES_FILE = CACHE_DIR / "names.json"
+APP_LOG_FILE = CACHE_DIR / "app.log"
+APP_LOG_MAX_BYTES = 2 * 1024 * 1024
+APP_LOG_BACKUPS = 3
+_RICH_TAG_RE = re.compile(r"\[/?[^\]]+\]")
+_LOCAL_FALLBACK_LOG = Path.cwd() / ".neon_quotes" / "app.log"
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -90,3 +96,43 @@ def save_names_cache(names: dict[tuple[str, str], str]) -> None:
         "names": payload_names,
     }
     _write_json(NAMES_FILE, payload)
+
+
+def _rotate_log_files(path: Path, max_bytes: int = APP_LOG_MAX_BYTES, backups: int = APP_LOG_BACKUPS) -> None:
+    try:
+        if not path.exists():
+            return
+        if path.stat().st_size < max_bytes:
+            return
+    except Exception:
+        return
+
+    for index in range(backups, 0, -1):
+        src = path.with_name(f"{path.name}.{index}")
+        dst = path.with_name(f"{path.name}.{index + 1}")
+        if src.exists():
+            try:
+                if index == backups:
+                    src.unlink(missing_ok=True)
+                else:
+                    src.replace(dst)
+            except Exception:
+                pass
+    try:
+        path.replace(path.with_name(f"{path.name}.1"))
+    except Exception:
+        pass
+
+
+def append_app_log_line(line: str) -> None:
+    clean = _RICH_TAG_RE.sub("", line or "")
+    targets = [APP_LOG_FILE, _LOCAL_FALLBACK_LOG]
+    for target in targets:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _rotate_log_files(target)
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(clean.rstrip() + "\n")
+            return
+        except Exception:
+            continue

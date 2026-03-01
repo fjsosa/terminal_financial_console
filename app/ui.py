@@ -10,7 +10,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 from zoneinfo import ZoneInfo
@@ -26,6 +26,9 @@ from textual.widgets import DataTable, Input, RichLog, Static
 
 from .config import (
     CACHE_TTL_SECONDS,
+    CALENDAR_HORIZON_DAYS,
+    CALENDAR_REFRESH_SECONDS,
+    CALENDAR_SOON_HOURS,
     CHART_HISTORY_POINTS,
     DEFAULT_CRYPTO_SYMBOLS,
     DEFAULT_STOCK_SYMBOLS,
@@ -42,7 +45,9 @@ from .config import (
     STOCK_GROUP_ROTATE_SECONDS,
     STOCKS_REFRESH_SECONDS,
 )
+from .calendar import CalendarEvent, fetch_calendar_events
 from .cache import load_names_cache, load_symbol_history_cache, save_names_cache, save_symbol_history_cache
+from .cache import append_app_log_line
 from .feed import BinanceTickerFeed
 from .i18n import format_time_local, set_language, tr
 from .models import Quote
@@ -54,6 +59,7 @@ from .stocks import (
     fetch_stock_quotes,
 )
 from .symbol_names import resolve_symbol_names, update_config_group_names
+from .version import get_app_version
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
@@ -64,6 +70,7 @@ STOCK_TREND_UP_COLOR = "#00ffae"
 STOCK_TREND_DOWN_COLOR = "#ff5e7a"
 TICKER_MODE_SECONDS = 60
 NEWS_MODE_SECONDS = 180
+CALENDAR_MODE_SECONDS = 60
 NEWS_TICKER_LIMIT = 10
 NEWS_TICKER_HEADLINE_MAX = 110
 
@@ -397,6 +404,80 @@ class ReadmeModal(ModalScreen[None]):
             return
 
 
+class CalendarModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "close_modal", show=False),
+        Binding("q", "close_modal", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    CalendarModal {
+        align: center middle;
+        background: rgba(1, 5, 9, 0.85);
+    }
+    #calendar_scroll {
+        width: 96%;
+        height: 92%;
+        border: round #2ec4b6;
+        background: #060d15;
+        padding: 1 2;
+    }
+    #calendar_box {
+        width: 1fr;
+    }
+    """
+
+    def __init__(self, renderer: Callable[[], Text]) -> None:
+        super().__init__()
+        self.renderer = renderer
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="calendar_scroll"):
+            yield Static("", id="calendar_box")
+
+    async def on_mount(self) -> None:
+        self.query_one("#calendar_scroll", VerticalScroll).focus()
+        self._refresh()
+        self.set_interval(1.0, self._refresh)
+
+    def _refresh(self) -> None:
+        self.query_one("#calendar_box", Static).update(self.renderer())
+
+    def action_close_modal(self) -> None:
+        self.dismiss(None)
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key in {"escape", "q"}:
+            self.dismiss(None)
+            event.stop()
+            return
+        scroller = self.query_one("#calendar_scroll", VerticalScroll)
+        if event.key in {"down", "j"}:
+            scroller.scroll_down(animate=False)
+            event.stop()
+            return
+        if event.key in {"up", "k"}:
+            scroller.scroll_up(animate=False)
+            event.stop()
+            return
+        if event.key == "pagedown":
+            scroller.scroll_page_down(animate=False)
+            event.stop()
+            return
+        if event.key == "pageup":
+            scroller.scroll_page_up(animate=False)
+            event.stop()
+            return
+        if event.key == "home":
+            scroller.scroll_home(animate=False)
+            event.stop()
+            return
+        if event.key == "end":
+            scroller.scroll_end(animate=False)
+            event.stop()
+            return
+
+
 class CommandInput(Input):
     async def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
@@ -491,6 +572,7 @@ class NeonQuotesApp(App[None]):
         timezone: str = "",
         language: str = "es",
         config_name: str = "",
+        calendars: Iterable[dict[str, Any]] | None = None,
         groups: Iterable[dict[str, Any]] | None = None,
         indicator_groups: Iterable[dict[str, Any]] | None = None,
         quick_actions: dict[str, str] | None = None,
@@ -519,6 +601,8 @@ class NeonQuotesApp(App[None]):
         self.timezone = timezone.strip()
         self.language = (language or "es").strip().lower()
         self.config_name = (config_name or "").strip()
+        self.app_version = get_app_version()
+        self.calendars = list(calendars or [])
         set_language(self.language)
         self.feed = BinanceTickerFeed([])
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.crypto_symbols}
@@ -555,13 +639,21 @@ class NeonQuotesApp(App[None]):
         self.news_latest_items: list[NewsItem] = []
         self.news_group_index = 0
         self.news_row_links: dict[int, str] = {}
-        self.ticker_mode = "quotes"
-        self.ticker_news_ticks_remaining = 0
+        self.ticker_modes: list[tuple[str, int]] = [
+            ("quotes", max(1, TICKER_MODE_SECONDS // TICKER_MODE_SECONDS)),
+            ("news", max(1, NEWS_MODE_SECONDS // TICKER_MODE_SECONDS)),
+            ("calendar", max(1, CALENDAR_MODE_SECONDS // TICKER_MODE_SECONDS)),
+        ]
+        self.ticker_mode_index = 0
+        self.ticker_mode = self.ticker_modes[0][0]
+        self.ticker_mode_ticks_remaining = self.ticker_modes[0][1]
         self.main_rotation_pause_until = 0.0
         self.indicator_rotation_pause_until = 0.0
         self.news_rotation_pause_until = 0.0
         self.stocks_last_update = "never"
         self.indicators_last_update = "never"
+        self.calendar_last_update = "never"
+        self.calendar_events: list[CalendarEvent] = []
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
             symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.crypto_symbols
@@ -608,7 +700,7 @@ class NeonQuotesApp(App[None]):
         yield Static(id="ticker")
         yield Static(id="status_line")
         yield CommandInput(
-            placeholder=":q | :r | :n | :? | :add | :del | :mv | :edit",
+            placeholder=":q | :r | :n | :c calendar | :? | :add | :del | :mv | :edit",
             id="command_input",
         )
 
@@ -719,6 +811,7 @@ class NeonQuotesApp(App[None]):
         self.set_interval(0.15, self._animate_ticker)
         self.set_interval(TICKER_MODE_SECONDS, self._rotate_ticker_mode)
         self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
+        self.set_interval(CALENDAR_REFRESH_SECONDS, self._schedule_calendar_refresh)
         self.set_interval(NEWS_GROUP_ROTATE_SECONDS, self._rotate_news_group)
         self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_main_group)
         self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_indicator_group)
@@ -864,6 +957,7 @@ class NeonQuotesApp(App[None]):
             await self._refresh_crypto_stream_for_visible_group()
             self.lazy_history_task = self._spawn_background(self._load_remaining_history_in_background())
             self._schedule_news_refresh()
+            self._schedule_calendar_refresh()
             self._schedule_stock_refresh()
             self._schedule_indicator_refresh()
 
@@ -876,7 +970,7 @@ class NeonQuotesApp(App[None]):
         now = format_time_local(datetime.now(self.local_tz), tzinfo=self.local_tz)
         config_name = self.config_name or "default"
         header = (
-            f"[bold {palette['ok']}]NEON MARKET TERM[/] "
+            f"[bold {palette['ok']}]NEON MARKET TERM v{self.app_version}[/] "
             f"[{palette['muted']}]|[/] "
             f"[{palette['brand']}]{config_name}[/] "
             f"[{palette['muted']}]|[/] "
@@ -890,16 +984,31 @@ class NeonQuotesApp(App[None]):
     def _rotate_ticker_mode(self) -> None:
         if self.is_shutting_down:
             return
-        if self.ticker_mode == "quotes":
-            self.ticker_mode = "news"
-            # Current minute in news mode + remaining minute ticks to complete NEWS_MODE_SECONDS.
-            total_news_ticks = max(1, NEWS_MODE_SECONDS // TICKER_MODE_SECONDS)
-            self.ticker_news_ticks_remaining = max(0, total_news_ticks - 1)
+        available_modes: list[tuple[str, int]] = []
+        for mode, ticks in self.ticker_modes:
+            if mode == "calendar" and not self._calendar_events_for_ticker():
+                continue
+            available_modes.append((mode, ticks))
+        if not available_modes:
+            available_modes = [("quotes", 1)]
+
+        # If current mode is no longer available, snap to first available mode.
+        available_names = [name for name, _ in available_modes]
+        if self.ticker_mode not in available_names:
+            self.ticker_mode_index = 0
+            self.ticker_mode, ticks = available_modes[0]
+            self.ticker_mode_ticks_remaining = max(1, ticks)
+            self.ticker_offset = 0
+            return
+
+        if self.ticker_mode_ticks_remaining > 1:
+            self.ticker_mode_ticks_remaining -= 1
         else:
-            if self.ticker_news_ticks_remaining > 0:
-                self.ticker_news_ticks_remaining -= 1
-            else:
-                self.ticker_mode = "quotes"
+            current_pos = available_names.index(self.ticker_mode)
+            next_pos = (current_pos + 1) % len(available_modes)
+            self.ticker_mode_index = next_pos
+            self.ticker_mode, ticks = available_modes[next_pos]
+            self.ticker_mode_ticks_remaining = max(1, ticks)
         self.ticker_offset = 0
 
     def _alerts_items_for_ticker(self) -> list[tuple[str, str]]:
@@ -938,6 +1047,97 @@ class NeonQuotesApp(App[None]):
             title = title[: NEWS_TICKER_HEADLINE_MAX - 1].rstrip() + "…"
         return f"[{source}: {age}] {title}"
 
+    def _format_hhmmss(self, delta_seconds: int) -> str:
+        total = max(0, int(delta_seconds))
+        hh = total // 3600
+        mm = (total % 3600) // 60
+        ss = total % 60
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+    def _calendar_status_label(self, event: CalendarEvent) -> tuple[str, str]:
+        now_utc = datetime.now(tz=UTC)
+        if event.start_utc <= now_utc <= event.end_utc:
+            return tr("LIVE ALERT"), "live"
+        if now_utc > event.end_utc:
+            return tr("FINISHED"), "done"
+        delta = event.start_utc - now_utc
+        if delta.total_seconds() <= CALENDAR_SOON_HOURS * 3600:
+            return tr("event starts in {time}").format(
+                time=self._format_hhmmss(int(delta.total_seconds()))
+            ), "soon"
+        return tr("SCHEDULED"), "scheduled"
+
+    def _calendar_events_for_ticker(self) -> list[CalendarEvent]:
+        if not self.calendar_events:
+            return []
+        now_local = datetime.now(self.local_tz)
+        today = now_local.date()
+        out: list[CalendarEvent] = []
+        for event in self.calendar_events:
+            start_local = event.start_utc.astimezone(self.local_tz)
+            if start_local.date() != today:
+                continue
+            impact = (event.impact or "").strip().lower()
+            if impact not in {"high", "alto", "3", "3.0"}:
+                continue
+            out.append(event)
+        out.sort(key=lambda e: e.start_utc)
+        return out
+
+    def _build_calendar_text(self) -> Text:
+        palette = self._ui_palette()
+        txt = Text()
+        now_local = datetime.now(self.local_tz)
+        txt.append(f"{tr('ECONOMIC CALENDAR')}\n", style=f"bold {palette['brand']}")
+        txt.append(
+            (
+                f"{tr('updated')} {self.calendar_last_update} | "
+                f"{tr('horizon')} {CALENDAR_HORIZON_DAYS}d | "
+                f"{tr('now')} {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            ),
+            style=palette["muted"],
+        )
+        if not self.calendars:
+            txt.append(f"{tr('No calendars configured in config.yml.')}\n", style=palette["warn"])
+            txt.append(
+                tr("Add a 'calendars' section with one or more entries.") + "\n",
+                style=palette["muted"],
+            )
+            return txt
+        if not self.calendar_events:
+            txt.append(
+                f"{tr('Calendars configured: {count}. No events available from source.').format(count=len(self.calendars))}\n",
+                style=palette["warn"],
+            )
+            txt.append(
+                f"{tr('Check internet connectivity, source availability, and region filters.')}\n",
+                style=palette["muted"],
+            )
+            return txt
+
+        for event in self.calendar_events:
+            start_local = event.start_utc.astimezone(self.local_tz)
+            end_local = event.end_utc.astimezone(self.local_tz)
+            status, kind = self._calendar_status_label(event)
+            status_color = palette["muted"]
+            if kind == "live":
+                status_color = palette["err"]
+            elif kind == "done":
+                status_color = palette["muted"]
+            elif kind == "soon":
+                status_color = palette["warn"]
+            txt.append(
+                f"[{event.calendar_name}] {start_local.strftime('%Y-%m-%d %H:%M')} - {end_local.strftime('%H:%M')} ",
+                style=palette["accent"],
+            )
+            txt.append(f"{event.title}\n", style=palette["text"])
+            txt.append(
+                f"  {event.country}/{event.region}  impact={event.impact or '-'}  ",
+                style=palette["muted"],
+            )
+            txt.append(f"{status}\n\n", style=f"bold {status_color}")
+        return txt
+
     def _animate_ticker(self) -> None:
         chunks: list[str] = []
         mode = self.ticker_mode
@@ -952,17 +1152,28 @@ class NeonQuotesApp(App[None]):
                 arrow = "▲" if state.change_percent >= 0 else "▼"
                 prefix = "C" if symbol_type == "crypto" else "S"
                 chunks.append(f"{prefix}:{symbol} {arrow} {state.price:,.2f} ({state.change_percent:+.2f}%)")
-        else:
+        elif mode == "news":
             for idx, item in enumerate(self.news_latest_items[:NEWS_TICKER_LIMIT]):
                 chunks.append(self._headline_inline(item))
                 if idx < min(len(self.news_latest_items), NEWS_TICKER_LIMIT) - 1:
                     chunks.append("BREAKING NEWS")
+        else:
+            calendar_events = self._calendar_events_for_ticker()[:12]
+            for idx, event in enumerate(calendar_events):
+                status, _kind = self._calendar_status_label(event)
+                title = " ".join(event.title.split())
+                if len(title) > 60:
+                    title = title[:59].rstrip() + "…"
+                chunks.append(f"[{event.calendar_name}] {title} ({status})")
+                if (idx + 1) % 2 == 0 and idx < len(calendar_events) - 1:
+                    chunks.append(tr("TODAY EVENTS"))
 
         if not chunks:
             self.query_one("#ticker", Static).update(tr("Waiting for market data..."))
             return
 
-        line = "   |   ".join(chunks)
+        separator = " | " if mode == "calendar" else "   |   "
+        line = separator.join(chunks)
         scroll = f"{line}   ||   {line}   ||   "
         if not scroll:
             return
@@ -977,7 +1188,7 @@ class NeonQuotesApp(App[None]):
                     ticker_text.stylize(palette["ok"], idx, idx + 1)
                 elif ch == "▼":
                     ticker_text.stylize(palette["err"], idx, idx + 1)
-        else:
+        elif mode == "news":
             alert_style = palette["warn"] if self.heartbeat else palette["err"]
             token = "BREAKING NEWS"
             start = 0
@@ -987,6 +1198,28 @@ class NeonQuotesApp(App[None]):
                     break
                 ticker_text.stylize(f"bold {alert_style}", pos, pos + len(token))
                 start = pos + len(token)
+        else:
+            token = tr("LIVE ALERT")
+            start = 0
+            while True:
+                pos = visible.find(token, start)
+                if pos < 0:
+                    break
+                ticker_text.stylize(f"bold {palette['err']}", pos, pos + len(token))
+                start = pos + len(token)
+            alert_token = tr("TODAY EVENTS")
+            start = 0
+            blink_style = palette["warn"] if self.heartbeat else palette["err"]
+            while True:
+                pos = visible.find(alert_token, start)
+                if pos < 0:
+                    break
+                ticker_text.stylize(f"bold {blink_style}", pos, pos + len(alert_token))
+                start = pos + len(alert_token)
+            # Highlight only the [CALENDAR_NAME] prefix with palette accent.
+            name_token_re = re.compile(r"\[[^\]]+\]")
+            for match in name_token_re.finditer(visible):
+                ticker_text.stylize(f"bold {palette['accent']}", match.start(), match.end())
         self.query_one("#ticker", Static).update(ticker_text)
         self.ticker_offset += 1
 
@@ -1010,12 +1243,48 @@ class NeonQuotesApp(App[None]):
             return
         self._spawn_background(self._refresh_news())
 
+    def _schedule_calendar_refresh(self) -> None:
+        if self.is_shutting_down:
+            return
+        self._spawn_background(self._refresh_calendar())
+
+    async def _refresh_calendar(self) -> None:
+        if not self.calendars:
+            self._log(
+                f"[{self._ui_palette()['warn']}]CALENDAR[/] "
+                f"{tr('no calendars configured in config.yml')}"
+            )
+            return
+        try:
+            events = await asyncio.to_thread(
+                fetch_calendar_events,
+                self.calendars,
+                CALENDAR_HORIZON_DAYS,
+            )
+            self.calendar_events = events
+            self.calendar_last_update = datetime.now(self.local_tz).strftime("%H:%M")
+            self._log(
+                f"[{self._ui_palette()['accent']}]CALENDAR[/] refreshed {len(events)} events "
+                f"from {len(self.calendars)} calendars (next {CALENDAR_HORIZON_DAYS}d)"
+            )
+        except Exception as exc:
+            self._log(f"[{self._ui_palette()['warn']}]Calendar warning:[/] {exc!r}")
+
+    def action_open_calendar(self) -> None:
+        # Defer screen push to next refresh cycle to avoid collisions with
+        # command-input submit/enter handling in the same event loop tick.
+        self._log(
+            f"[{self._ui_palette()['accent']}]CALENDAR[/] "
+            f"{tr('opening calendar modal')}"
+        )
+        self.call_after_refresh(lambda: self.push_screen(CalendarModal(self._build_calendar_text)))
+
     def action_refresh_news(self) -> None:
         self._log("[#2ec4b6]NEWS[/] manual refresh requested")
         self._schedule_news_refresh()
 
     def action_quick_quit(self) -> None:
-        if isinstance(self.screen, ChartModal):
+        if isinstance(self.screen, (ChartModal, ReadmeModal, CalendarModal)):
             self.screen.dismiss(None)
             return
         if not self.command_mode:
@@ -2089,7 +2358,7 @@ class NeonQuotesApp(App[None]):
             left = (
                 f":{self.command_buffer}█ | [Enter] {tr('run')} | [Esc] {tr('normal')} | "
                 f"q {tr('quit')} | r {tr('reset')} | n {tr('news')} | ? {tr('help')} | "
-                "add/del/mv/edit"
+                "c calendar | add/del/mv/edit"
             )
             right = tr("status: enter command")
             right_style = palette["warn"]
@@ -2142,11 +2411,13 @@ class NeonQuotesApp(App[None]):
         return raw.casefold() == cf or normalized.casefold() == cf
 
     def _command_slot_candidates(self, committed: list[str]) -> list[str]:
-        commands = ["q", "r", "n", "?", "add", "del", "mv", "edit"]
+        commands = ["q", "r", "n", "c", "calendar", "?", "add", "del", "mv", "edit"]
         if not committed:
             return commands
         cmd = committed[0].lower()
         target_index = len(committed)
+        if cmd == "c" and target_index == 1:
+            return ["calendar"]
         if cmd in {"del", "mv", "edit"} and target_index == 1:
             return self._all_configured_symbols()
         if cmd == "add" and target_index == 2:
@@ -2289,6 +2560,23 @@ class NeonQuotesApp(App[None]):
         for key in ("1", "2", "3"):
             value = str(self.quick_actions.get(key) or "").strip()
             lines.append(f"  {self._yaml_quote(key)}: {self._yaml_quote(value)}")
+
+        lines.append("calendars:")
+        for item in self.calendars:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            source = str(item.get("source") or "forexfactory").strip().lower()
+            region = str(item.get("region") or "GLOBAL").strip()
+            enabled = bool(item.get("enabled", True))
+            duration = int(item.get("default_duration_min") or 60)
+            if duration <= 0:
+                duration = 60
+            lines.append(f"- name: {self._yaml_quote(name)}")
+            lines.append(f"  source: {self._yaml_quote(source)}")
+            lines.append(f"  region: {self._yaml_quote(region)}")
+            lines.append(f"  enabled: {'true' if enabled else 'false'}")
+            lines.append(f"  default_duration_min: {duration}")
 
         lines.append("indicator_groups:")
         for group in self.indicator_groups:
@@ -2618,6 +2906,18 @@ class NeonQuotesApp(App[None]):
         if cmd == "n":
             self.action_refresh_news()
             return
+        if cmd == "c":
+            if len(tokens) == 1:
+                self.action_open_calendar()
+                return
+            if len(tokens) >= 2 and tokens[1].strip().lower() == "calendar":
+                self.action_open_calendar()
+                return
+            self._log(f"[yellow]{tr('Usage: :c calendar')}[/]")
+            return
+        if cmd == "calendar":
+            self.action_open_calendar()
+            return
         if cmd == "?":
             self.push_screen(ReadmeModal(self._load_readme_text()))
             return
@@ -2637,6 +2937,9 @@ class NeonQuotesApp(App[None]):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command_input":
+            return
+        if not self.command_mode:
+            # Enter was already handled by on_key command mode path.
             return
         raw = (event.value or "").strip()
         if raw.startswith(":"):
@@ -3080,6 +3383,11 @@ class NeonQuotesApp(App[None]):
 
     def _log(self, message: str) -> None:
         self.query_one("#events", RichLog).write(message)
+        ts = datetime.now(self.local_tz).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            append_app_log_line(f"{ts} {message}")
+        except Exception:
+            pass
 
     def action_reset(self) -> None:
         for symbol in self.crypto_symbols:
@@ -3187,11 +3495,17 @@ class NeonQuotesApp(App[None]):
                 break
 
     async def on_key(self, event: events.Key) -> None:
-        if isinstance(self.screen, (ChartModal, ReadmeModal)):
-            if event.key in {"escape", "enter", "q"}:
-                self.screen.dismiss(None)
-                event.stop()
-                return
+        if isinstance(self.screen, (ChartModal, ReadmeModal, CalendarModal)):
+            if isinstance(self.screen, CalendarModal):
+                if event.key in {"escape", "q"}:
+                    self.screen.dismiss(None)
+                    event.stop()
+                    return
+            else:
+                if event.key in {"escape", "enter", "q"}:
+                    self.screen.dismiss(None)
+                    event.stop()
+                    return
             # While chart modal is open, global shortcuts must not affect the app.
             return
 
@@ -3240,6 +3554,19 @@ class NeonQuotesApp(App[None]):
                 self._exit_command_mode()
                 event.stop()
                 return
+            if event.key == "enter":
+                command_input = self.query_one("#command_input", Input)
+                raw = (command_input.value or "").strip()
+                if raw.startswith(":"):
+                    raw = raw[1:].strip()
+                if raw:
+                    self._execute_command(raw)
+                command_input.value = ""
+                self._tab_cycle_key = None
+                self._tab_cycle_index = -1
+                self._exit_command_mode()
+                event.stop()
+                return
             # Let Input widget handle typing/submission in command mode.
             return
 
@@ -3265,6 +3592,7 @@ def run_app(
     timezone: str = "",
     language: str = "es",
     config_name: str = "",
+    calendars: Iterable[dict[str, Any]] | None = None,
     groups: Iterable[dict[str, Any]] | None = None,
     indicator_groups: Iterable[dict[str, Any]] | None = None,
     quick_actions: dict[str, str] | None = None,
@@ -3277,6 +3605,7 @@ def run_app(
         timezone=timezone,
         language=language,
         config_name=config_name,
+        calendars=calendars,
         groups=groups,
         indicator_groups=indicator_groups,
         quick_actions=quick_actions,

@@ -120,7 +120,9 @@ def _fetch_crypto_names(symbols: list[str]) -> dict[str, str]:
 
 def resolve_symbol_names(
     groups: list[dict],
-) -> tuple[list[dict], dict[tuple[str, str], str], dict[str, int]]:
+    indicator_groups: list[dict] | None = None,
+) -> tuple[list[dict], list[dict], dict[tuple[str, str], str], dict[str, int]]:
+    indicator_groups = list(indicator_groups or [])
     stock_missing: list[str] = []
     crypto_missing: list[str] = []
     resolved_map: dict[tuple[str, str], str] = {}
@@ -133,7 +135,8 @@ def resolve_symbol_names(
         "crypto_resolved_remote": 0,
     }
 
-    for group in groups:
+    all_groups = list(groups) + indicator_groups
+    for group in all_groups:
         items = group.get("symbols")
         if not isinstance(items, list):
             continue
@@ -169,41 +172,50 @@ def resolve_symbol_names(
     crypto_names = _fetch_crypto_names(sorted(set(crypto_missing)))
     stats["crypto_resolved_remote"] = len(crypto_names)
 
-    enriched: list[dict] = []
-    for group in groups:
-        new_group = {"name": group.get("name", "Group"), "symbols": []}
-        items = group.get("symbols")
-        if not isinstance(items, list):
-            enriched.append(new_group)
-            continue
-        for item in items:
-            if not isinstance(item, dict):
+    def enrich_group_list(source_groups: list[dict]) -> list[dict]:
+        enriched_local: list[dict] = []
+        for group in source_groups:
+            new_group = {"name": group.get("name", "Group"), "symbols": []}
+            items = group.get("symbols")
+            if not isinstance(items, list):
+                enriched_local.append(new_group)
                 continue
-            symbol = str(item.get("symbol") or "").upper()
-            symbol_type = str(item.get("type") or "").lower()
-            if not symbol or symbol_type not in {"stock", "crypto"}:
-                continue
-            name = str(item.get("name") or "").strip()
-            if not name:
-                if symbol_type == "stock":
-                    name = stock_names.get(symbol, "")
-                else:
-                    name = crypto_names.get(symbol, "")
-            if not name:
-                name = _crypto_base(symbol).title() if symbol_type == "crypto" else symbol
-            resolved_map[(symbol, symbol_type)] = name
-            new_group["symbols"].append(
-                {
-                    "symbol": symbol,
-                    "type": symbol_type,
-                    "name": name,
-                }
-            )
-        enriched.append(new_group)
-    return enriched, resolved_map, stats
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").upper()
+                symbol_type = str(item.get("type") or "").lower()
+                if not symbol or symbol_type not in {"stock", "crypto"}:
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    if symbol_type == "stock":
+                        name = stock_names.get(symbol, "")
+                    else:
+                        name = crypto_names.get(symbol, "")
+                if not name:
+                    name = _crypto_base(symbol).title() if symbol_type == "crypto" else symbol
+                resolved_map[(symbol, symbol_type)] = name
+                new_group["symbols"].append(
+                    {
+                        "symbol": symbol,
+                        "type": symbol_type,
+                        "name": name,
+                    }
+                )
+            enriched_local.append(new_group)
+        return enriched_local
+
+    enriched = enrich_group_list(groups)
+    enriched_indicators = enrich_group_list(indicator_groups)
+    return enriched, enriched_indicators, resolved_map, stats
 
 
-def update_config_group_names(config_path: str, groups: list[dict]) -> bool:
+def update_config_group_names(
+    config_path: str,
+    groups: list[dict],
+    indicator_groups: list[dict] | None = None,
+) -> bool:
     path = Path(config_path)
     if not path.exists():
         return False
@@ -218,8 +230,11 @@ def update_config_group_names(config_path: str, groups: list[dict]) -> bool:
         if not isinstance(data, dict):
             return False
         current_groups = data.get("groups")
+        current_indicator_groups = data.get("indicator_groups")
         if not isinstance(current_groups, list):
-            return False
+            current_groups = []
+        if not isinstance(current_indicator_groups, list):
+            current_indicator_groups = []
 
         lookup: dict[tuple[str, str], str] = {}
         for group in groups:
@@ -234,9 +249,21 @@ def update_config_group_names(config_path: str, groups: list[dict]) -> bool:
                 symbol_name = str(item.get("name") or "").strip()
                 if symbol and symbol_type in {"stock", "crypto"} and symbol_name:
                     lookup[(symbol, symbol_type)] = symbol_name
+        for group in list(indicator_groups or []):
+            items = group.get("symbols")
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").upper()
+                symbol_type = str(item.get("type") or "").lower()
+                symbol_name = str(item.get("name") or "").strip()
+                if symbol and symbol_type in {"stock", "crypto"} and symbol_name:
+                    lookup[(symbol, symbol_type)] = symbol_name
 
         changed = False
-        for group in current_groups:
+        for group in list(current_groups) + list(current_indicator_groups):
             if not isinstance(group, dict):
                 continue
             items = group.get("symbols")

@@ -11,6 +11,7 @@ if __name__ == "__main__":
         timezone=settings.timezone,
         language=settings.language,
         config_name=settings.config_name,
+        calendars=settings.calendars,
         groups=settings.groups,
         indicator_groups=settings.indicator_groups,
         quick_actions=settings.quick_actions,
