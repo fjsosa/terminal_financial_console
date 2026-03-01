@@ -49,4 +49,5 @@ if __name__ == "__main__":
         crypto_symbols=settings.crypto_symbols,
         stock_symbols=settings.stock_symbols,
         timezone=settings.timezone,
+        groups=settings.groups,
     )

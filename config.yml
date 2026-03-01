@@ -1,22 +1,400 @@
 # Neon Quotes configuration
 # Precedence: config.yml < environment variables < CLI arguments
-
-# IANA timezone, e.g. America/Argentina/Buenos_Aires
 timezone: "America/Argentina/Buenos_Aires"
 
-# Crypto symbols in Binance format
-crypto_symbols:
-  - BTCUSDT
-  - ETHUSDT
-  - SOLUSDT
-  - ADAUSDT
-  - BNBUSDT
-  - PAXGUSDT
+groups:
+  - name: "Crypto"
+    symbols:
+      - symbol: BTCUSDT
+        type: crypto
+      - symbol: ETHUSDT
+        type: crypto
+      - symbol: SOLUSDT
+        type: crypto
+      - symbol: ADAUSDT
+        type: crypto
+      - symbol: BNBUSDT
+        type: crypto
+      - symbol: XRPUSDT
+        type: crypto
+      - symbol: DOGEUSDT
+        type: crypto
+      - symbol: AVAXUSDT
+        type: crypto
+      - symbol: MATICUSDT
+        type: crypto
+      - symbol: DOTUSDT
+        type: crypto
+      - symbol: LINKUSDT
+        type: crypto
+      - symbol: LTCUSDT
+        type: crypto
+      - symbol: BCHUSDT
+        type: crypto
+      - symbol: TRXUSDT
+        type: crypto
+      - symbol: UNIUSDT
+        type: crypto
 
-# Stock symbols (Yahoo Finance tickers)
-stock_symbols:
-  - AAPL
-  - MSFT
-  - NVDA
-  - AMZN
-  - GOOGL
+  - name: "Tecnologia"
+    symbols:
+      - symbol: AAPL
+        type: stock
+      - symbol: MSFT
+        type: stock
+      - symbol: NVDA
+        type: stock
+      - symbol: GOOGL
+        type: stock
+      - symbol: META
+        type: stock
+      - symbol: ORCL
+        type: stock
+      - symbol: ADBE
+        type: stock
+      - symbol: CRM
+        type: stock
+      - symbol: AMD
+        type: stock
+      - symbol: INTC
+        type: stock
+      - symbol: CSCO
+        type: stock
+      - symbol: IBM
+        type: stock
+      - symbol: QCOM
+        type: stock
+      - symbol: AVGO
+        type: stock
+      - symbol: TXN
+        type: stock
+
+  - name: "Finanzas"
+    symbols:
+      - symbol: JPM
+        type: stock
+      - symbol: GS
+        type: stock
+      - symbol: V
+        type: stock
+      - symbol: MA
+        type: stock
+      - symbol: BAC
+        type: stock
+      - symbol: C
+        type: stock
+      - symbol: WFC
+        type: stock
+      - symbol: MS
+        type: stock
+      - symbol: AXP
+        type: stock
+      - symbol: BLK
+        type: stock
+      - symbol: SPGI
+        type: stock
+      - symbol: SCHW
+        type: stock
+      - symbol: USB
+        type: stock
+      - symbol: PNC
+        type: stock
+      - symbol: COF
+        type: stock
+
+  - name: "Salud"
+    symbols:
+      - symbol: JNJ
+        type: stock
+      - symbol: PFE
+        type: stock
+      - symbol: UNH
+        type: stock
+      - symbol: MRK
+        type: stock
+      - symbol: ABBV
+        type: stock
+      - symbol: LLY
+        type: stock
+      - symbol: TMO
+        type: stock
+      - symbol: ABT
+        type: stock
+      - symbol: BMY
+        type: stock
+      - symbol: MDT
+        type: stock
+      - symbol: AMGN
+        type: stock
+      - symbol: GILD
+        type: stock
+      - symbol: CI
+        type: stock
+      - symbol: CVS
+        type: stock
+      - symbol: ISRG
+        type: stock
+
+  - name: "Consumo basico"
+    symbols:
+      - symbol: PG
+        type: stock
+      - symbol: KO
+        type: stock
+      - symbol: WMT
+        type: stock
+      - symbol: COST
+        type: stock
+      - symbol: PEP
+        type: stock
+      - symbol: PM
+        type: stock
+      - symbol: MO
+        type: stock
+      - symbol: CL
+        type: stock
+      - symbol: KMB
+        type: stock
+      - symbol: GIS
+        type: stock
+      - symbol: KR
+        type: stock
+      - symbol: EL
+        type: stock
+      - symbol: MNST
+        type: stock
+      - symbol: DG
+        type: stock
+      - symbol: SYY
+        type: stock
+
+  - name: "Consumo discrecional"
+    symbols:
+      - symbol: AMZN
+        type: stock
+      - symbol: TSLA
+        type: stock
+      - symbol: NKE
+        type: stock
+      - symbol: HD
+        type: stock
+      - symbol: MCD
+        type: stock
+      - symbol: SBUX
+        type: stock
+      - symbol: LOW
+        type: stock
+      - symbol: BKNG
+        type: stock
+      - symbol: GM
+        type: stock
+      - symbol: F
+        type: stock
+      - symbol: ROST
+        type: stock
+      - symbol: TGT
+        type: stock
+      - symbol: MAR
+        type: stock
+      - symbol: DIS
+        type: stock
+      - symbol: EBAY
+        type: stock
+
+  - name: "Energia"
+    symbols:
+      - symbol: XOM
+        type: stock
+      - symbol: CVX
+        type: stock
+      - symbol: COP
+        type: stock
+      - symbol: SLB
+        type: stock
+      - symbol: EOG
+        type: stock
+      - symbol: MPC
+        type: stock
+      - symbol: PSX
+        type: stock
+      - symbol: OXY
+        type: stock
+      - symbol: VLO
+        type: stock
+      - symbol: KMI
+        type: stock
+      - symbol: WMB
+        type: stock
+      - symbol: PXD
+        type: stock
+      - symbol: HAL
+        type: stock
+      - symbol: DVN
+        type: stock
+      - symbol: FANG
+        type: stock
+
+  - name: "Industriales"
+    symbols:
+      - symbol: BA
+        type: stock
+      - symbol: CAT
+        type: stock
+      - symbol: GE
+        type: stock
+      - symbol: HON
+        type: stock
+      - symbol: UPS
+        type: stock
+      - symbol: UNP
+        type: stock
+      - symbol: RTX
+        type: stock
+      - symbol: DE
+        type: stock
+      - symbol: LMT
+        type: stock
+      - symbol: MMM
+        type: stock
+      - symbol: NOC
+        type: stock
+      - symbol: ETN
+        type: stock
+      - symbol: EMR
+        type: stock
+      - symbol: GD
+        type: stock
+      - symbol: ITW
+        type: stock
+
+  - name: "Servicios de comunicacion"
+    symbols:
+      - symbol: T
+        type: stock
+      - symbol: CMCSA
+        type: stock
+      - symbol: VZ
+        type: stock
+      - symbol: TMUS
+        type: stock
+      - symbol: CHTR
+        type: stock
+      - symbol: DIS
+        type: stock
+      - symbol: WBD
+        type: stock
+      - symbol: NFLX
+        type: stock
+      - symbol: FOXA
+        type: stock
+      - symbol: PARA
+        type: stock
+      - symbol: EA
+        type: stock
+      - symbol: SPOT
+        type: stock
+      - symbol: SNAP
+        type: stock
+      - symbol: RBLX
+        type: stock
+      - symbol: BILI
+        type: stock
+
+  - name: "Materiales"
+    symbols:
+      - symbol: DOW
+        type: stock
+      - symbol: DD
+        type: stock
+      - symbol: LIN
+        type: stock
+      - symbol: APD
+        type: stock
+      - symbol: ECL
+        type: stock
+      - symbol: SHW
+        type: stock
+      - symbol: NUE
+        type: stock
+      - symbol: NEM
+        type: stock
+      - symbol: FCX
+        type: stock
+      - symbol: VMC
+        type: stock
+      - symbol: MLM
+        type: stock
+      - symbol: IFF
+        type: stock
+      - symbol: PPG
+        type: stock
+      - symbol: CE
+        type: stock
+      - symbol: ALB
+        type: stock
+
+  - name: "Inmobiliario"
+    symbols:
+      - symbol: SPG
+        type: stock
+      - symbol: PLD
+        type: stock
+      - symbol: AMT
+        type: stock
+      - symbol: EQIX
+        type: stock
+      - symbol: O
+        type: stock
+      - symbol: PSA
+        type: stock
+      - symbol: WELL
+        type: stock
+      - symbol: VICI
+        type: stock
+      - symbol: AVB
+        type: stock
+      - symbol: EQR
+        type: stock
+      - symbol: SBAC
+        type: stock
+      - symbol: DLR
+        type: stock
+      - symbol: ARE
+        type: stock
+      - symbol: KIM
+        type: stock
+      - symbol: ESS
+        type: stock
+
+  - name: "Utilities"
+    symbols:
+      - symbol: NEE
+        type: stock
+      - symbol: DUK
+        type: stock
+      - symbol: SO
+        type: stock
+      - symbol: AEP
+        type: stock
+      - symbol: EXC
+        type: stock
+      - symbol: SRE
+        type: stock
+      - symbol: XEL
+        type: stock
+      - symbol: ED
+        type: stock
+      - symbol: PEG
+        type: stock
+      - symbol: WEC
+        type: stock
+      - symbol: AEE
+        type: stock
+      - symbol: ETR
+        type: stock
+      - symbol: FE
+        type: stock
+      - symbol: PCG
+        type: stock
+      - symbol: ES
+        type: stock

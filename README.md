@@ -5,15 +5,23 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 ## Caracteristicas
 
 - Interfaz TUI moderna con `Textual`
-- Cotizaciones en vivo por WebSocket publico de Binance
-- Tabla de crypto con precio, variacion 24h, volumen y sparkline
-- Tabla separada de acciones via `yfinance` (refresh cada 10 minutos)
+- Tabla principal con rotacion automatica de grupos definidos en `config.yml` (mixto crypto/stocks)
+- Tabla de alertas con top 15 variaciones absolutas (positivas y negativas)
+- Cotizaciones crypto en vivo por WebSocket publico de Binance
+- Cotizaciones de acciones via `yfinance` (refresh periodico)
+- Columna `Spark` en tabla principal con evolucion en vivo por simbolo
 - Ticker tipo zocalo (derecha a izquierda) con crypto + stocks
 - Panel de eventos
 - Panel de noticias multi-feed Finviz (v=3, v=4, v=5, v=6 y tabla News) con refresco cada 10 minutos
 - Descarga de las ultimas 21 noticias por cada feed de Finviz
 - Rotacion automatica de noticias en grupos de 7 cada 10 segundos
-- Precarga historica al inicio (N cotizaciones por simbolo) para graficos completos
+- Graficos por simbolo (desde tabla principal y alertas) con:
+  - Velas OHLC
+  - Grafico de live updates
+  - Timeframes `15m`, `1h`, `1d`, `1w`, `1mo`
+- Carga dinamica de historicos por timeframe para llenar el viewport del chart
+- Scroll vertical en modal de chart para terminales chicas
+- Precarga historica inicial para acelerar primer render
 - Modal de arranque con animacion y progreso de carga de historicos
 - Reconexion automatica ante desconexiones
 - Atajos de teclado
@@ -58,19 +66,30 @@ python main.py --tz America/Argentina/Buenos_Aires
 
 ## Configuracion
 
-El archivo `config.yml` permite definir:
+El archivo `config.yml` permite definir grupos mixtos (formato recomendado):
 
 ```yaml
 timezone: "America/Argentina/Buenos_Aires"
-crypto_symbols:
-  - BTCUSDT
-  - ETHUSDT
-  - SOLUSDT
-stock_symbols:
-  - AAPL
-  - MSFT
-  - NVDA
+groups:
+  - name: "Crypto"
+    symbols:
+      - symbol: BTCUSDT
+        type: crypto
+      - symbol: ETHUSDT
+        type: crypto
+      - symbol: SOLUSDT
+        type: crypto
+  - name: "Tecnologia"
+    symbols:
+      - symbol: AAPL
+        type: stock
+      - symbol: MSFT
+        type: stock
+      - symbol: NVDA
+        type: stock
 ```
+
+Tambien se soporta el formato legacy con `crypto_symbols` y `stock_symbols` por compatibilidad.
 
 Orden de prioridad (de menor a mayor):
 
@@ -93,11 +112,20 @@ NEON_STOCK_SYMBOLS="AAPL,MSFT,NVDA,AMZN" ./run_neon_quotes.sh
 - `n`: refrescar noticias manualmente
 - `Enter`: abrir grafico del activo seleccionado (crypto o stock), con refresco en vivo
 - `Enter` en tabla de noticias: copiar link de la noticia al portapapeles
-- `t` (en modal): alternar timeframe entre 15m y 1h
+- `t` (en modal): alternar timeframe entre 15m, 1h, 1d, 1w y 1mo
+- `:` entrar a modo comando
+- `Esc` salir de modo comando
 - `1`: foco en BTCUSDT
 - `2`: foco en ETHUSDT
 - `3`: foco en SOLUSDT
 - `a`: mostrar ayuda rapida en eventos
+
+Comandos en modo comando:
+
+- `:q` salir
+- `:r` reset
+- `:n` refresh news
+- `:help` ayuda de comandos
 
 
 Opcional (chart XY avanzado):

@@ -32,6 +32,7 @@ from .config import (
     NEWS_GROUP_SIZE,
     NEWS_MAX_ITEMS,
     NEWS_REFRESH_SECONDS,
+    STOCK_GROUP_ROTATE_SECONDS,
     STOCKS_REFRESH_SECONDS,
 )
 from .feed import BinanceTickerFeed
@@ -48,6 +49,7 @@ SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
 CANDLE_BUFFER_MAX = 1000
 TIMEFRAMES = ("15m", "1h", "1d", "1w", "1mo")
+ALERTS_TABLE_SIZE = 15
 
 try:
     import plotext as plt
@@ -316,15 +318,58 @@ class NeonQuotesApp(App[None]):
     status_text = reactive("CONNECTING")
     ticker_offset = reactive(0)
 
+    def _build_main_groups(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        groups: list[tuple[str, list[tuple[str, str]]]] = []
+        for group in self.market_groups:
+            if not isinstance(group, dict):
+                continue
+            name = str(group.get("name") or "MAIN").strip() or "MAIN"
+            raw_items = group.get("symbols")
+            if not isinstance(raw_items, list):
+                continue
+            symbols: list[tuple[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").strip().upper()
+                symbol_type = str(item.get("type") or "").strip().lower()
+                if symbol_type not in {"crypto", "stock"}:
+                    symbol_type = "crypto" if symbol.endswith("USDT") else "stock"
+                if not symbol:
+                    continue
+                key = (symbol, symbol_type)
+                if key in seen:
+                    continue
+                seen.add(key)
+                symbols.append(key)
+            if symbols:
+                groups.append((name, symbols))
+
+        if groups:
+            return groups
+        fallback_symbols: list[tuple[str, str]] = []
+        for symbol in self.crypto_symbols:
+            fallback_symbols.append((symbol, "crypto"))
+        for symbol in self.stock_symbols:
+            fallback_symbols.append((symbol, "stock"))
+        if fallback_symbols:
+            return [("MAIN", fallback_symbols)]
+        if self.stock_symbols:
+            return [("MAIN", [(symbol, "stock") for symbol in self.stock_symbols])]
+        return []
+
     def __init__(
         self,
         crypto_symbols: Iterable[str] | None = None,
         stock_symbols: Iterable[str] | None = None,
         timezone: str = "",
+        groups: Iterable[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self.crypto_symbols = list(crypto_symbols or DEFAULT_CRYPTO_SYMBOLS)
         self.stock_symbols = [symbol.upper() for symbol in (stock_symbols or DEFAULT_STOCK_SYMBOLS)]
+        self.market_groups = list(groups or [])
         self.timezone = timezone.strip()
         self.feed = BinanceTickerFeed(self.crypto_symbols)
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.crypto_symbols}
@@ -332,10 +377,15 @@ class NeonQuotesApp(App[None]):
         self.feed_task: asyncio.Task[None] | None = None
         self.last_tick_ms = 0
         self.focused_symbol: str | None = None
-        self.crypto_row_keys: dict[str, Any] = {}
-        self.crypto_col_keys: dict[str, Any] = {}
-        self.stock_row_keys: dict[str, Any] = {}
-        self.stock_col_keys: dict[str, Any] = {}
+        self.main_row_keys: list[Any] = []
+        self.main_col_keys: dict[str, Any] = {}
+        self.main_group_items: list[tuple[str, list[tuple[str, str]]]] = self._build_main_groups()
+        self.main_group_index = 0
+        self.main_visible_items: list[tuple[str, str]] = []
+        self.main_row_item_by_index: dict[int, tuple[str, str]] = {}
+        self.alerts_row_keys: list[Any] = []
+        self.alerts_col_keys: dict[str, Any] = {}
+        self.alerts_row_item_by_index: dict[int, tuple[str, str]] = {}
         self.news_row_keys: list[Any] = []
         self.news_col_keys: dict[str, Any] = {}
         self.news_last_update = "never"
@@ -381,41 +431,60 @@ class NeonQuotesApp(App[None]):
         yield CommandInput(placeholder=":q | :r | :n | :help", id="command_input")
 
     async def on_mount(self) -> None:
-        crypto_table = self.query_one("#crypto_quotes", DataTable)
-        crypto_table.cursor_type = "row"
-        crypto_table.zebra_stripes = True
-        col_symbol = crypto_table.add_column("Crypto")
-        col_price = crypto_table.add_column("Price", width=15)
-        col_change = crypto_table.add_column("24h %", width=10)
-        col_volume = crypto_table.add_column("Volume", width=22)
-        col_spark = crypto_table.add_column("Spark")
-        self.crypto_col_keys = {
+        main_table = self.query_one("#crypto_quotes", DataTable)
+        main_table.cursor_type = "row"
+        main_table.zebra_stripes = True
+        col_symbol = main_table.add_column("Ticker")
+        col_type = main_table.add_column("Type", width=8)
+        col_price = main_table.add_column("Price", width=15)
+        col_change = main_table.add_column("24h %", width=10)
+        col_volume = main_table.add_column("Volume", width=22)
+        col_spark = main_table.add_column("Spark")
+        self.main_col_keys = {
             "symbol": col_symbol,
+            "type": col_type,
             "price": col_price,
             "change": col_change,
             "volume": col_volume,
             "spark": col_spark,
         }
-        for symbol in self.crypto_symbols:
-            row_key = crypto_table.add_row(symbol, "-", "-", "-", "", key=symbol)
-            self.crypto_row_keys[symbol] = row_key
+        self.main_row_keys.clear()
+        main_rows = max(1, max((len(items) for _, items in self.main_group_items), default=1))
+        for i in range(main_rows):
+            row_key = main_table.add_row("-", "-", "-", "-", "-", "", key=f"main_{i}")
+            self.main_row_keys.append(row_key)
+        self._update_main_group_panel()
 
-        stock_table = self.query_one("#stock_quotes", DataTable)
-        stock_table.cursor_type = "row"
-        stock_table.zebra_stripes = True
-        s_symbol = stock_table.add_column("Stock")
-        s_price = stock_table.add_column("Price", width=15)
-        s_change = stock_table.add_column("Day %", width=10)
-        s_volume = stock_table.add_column("Volume", width=22)
-        self.stock_col_keys = {
-            "symbol": s_symbol,
-            "price": s_price,
-            "change": s_change,
-            "volume": s_volume,
+        alerts_table = self.query_one("#stock_quotes", DataTable)
+        alerts_table.cursor_type = "row"
+        alerts_table.zebra_stripes = True
+        a_rank = alerts_table.add_column("#", width=3)
+        a_symbol = alerts_table.add_column("Ticker")
+        a_type = alerts_table.add_column("Type", width=8)
+        a_change = alerts_table.add_column("24h %", width=10)
+        a_price = alerts_table.add_column("Price", width=15)
+        a_volume = alerts_table.add_column("Volume", width=22)
+        self.alerts_col_keys = {
+            "rank": a_rank,
+            "symbol": a_symbol,
+            "type": a_type,
+            "change": a_change,
+            "price": a_price,
+            "volume": a_volume,
         }
-        for symbol in self.stock_symbols:
-            row_key = stock_table.add_row(symbol, "-", "-", "-", key=symbol)
-            self.stock_row_keys[symbol] = row_key
+        self.alerts_row_keys.clear()
+        for i in range(ALERTS_TABLE_SIZE):
+            row_key = alerts_table.add_row(
+                f"{i + 1}",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                key=f"alert_{i}",
+            )
+            self.alerts_row_keys.append(row_key)
+        self._update_alerts_panel()
 
         news_table = self.query_one("#news_table", DataTable)
         news_table.cursor_type = "row"
@@ -457,6 +526,7 @@ class NeonQuotesApp(App[None]):
         self.set_interval(0.15, self._animate_ticker)
         self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
         self.set_interval(NEWS_GROUP_ROTATE_SECONDS, self._rotate_news_group)
+        self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_main_group)
         self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_stock_refresh)
         self.startup_task = asyncio.create_task(self._startup_sequence())
 
@@ -483,8 +553,10 @@ class NeonQuotesApp(App[None]):
             self._log(f"[yellow]Startup warning:[/] {exc!r}")
         finally:
             await self._hide_boot_modal()
-            if self.feed_task is None:
+            if self.feed_task is None and self.crypto_symbols:
                 self.feed_task = asyncio.create_task(self._consume_feed())
+            elif not self.crypto_symbols:
+                self.status_text = "STOCKS ONLY"
             self._schedule_news_refresh()
             self._schedule_stock_refresh()
 
@@ -598,25 +670,46 @@ class NeonQuotesApp(App[None]):
             self.screen.dismiss(None)
             return
         news_table = self.query_one("#news_table", DataTable)
-        stock_table = self.query_one("#stock_quotes", DataTable)
-        crypto_table = self.query_one("#crypto_quotes", DataTable)
+        alerts_table = self.query_one("#stock_quotes", DataTable)
+        main_table = self.query_one("#crypto_quotes", DataTable)
         if news_table.has_focus:
             row = news_table.cursor_row
             if row is not None:
                 self._copy_news_link(int(row))
             return
-        if stock_table.has_focus:
-            row = stock_table.cursor_row
+        if alerts_table.has_focus:
+            row = alerts_table.cursor_row
             if row is not None:
-                self._open_stock_chart_for_row(int(row))
+                self._open_alert_chart_for_row(int(row))
             return
-        row = crypto_table.cursor_row
+        row = main_table.cursor_row
         if row is not None:
-            self._open_chart_for_row(int(row))
+            self._open_main_chart_for_row(int(row))
 
-    def _open_chart_for_row(self, row_index: int) -> None:
-        row_index = max(0, min(row_index, len(self.crypto_symbols) - 1))
-        symbol = self.crypto_symbols[row_index]
+    def _open_chart_for_symbol(self, symbol: str, symbol_type: str) -> None:
+        if symbol_type == "stock":
+            if symbol not in self.stock_data:
+                self.stock_data[symbol] = StockState(symbol=symbol)
+                self.stock_candles[symbol] = deque(maxlen=CANDLE_BUFFER_MAX)
+                for tf in self.stock_candles_by_tf:
+                    self.stock_candles_by_tf[tf].setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
+            self.push_screen(
+                ChartModal(
+                    symbol=symbol,
+                    chart_builder=lambda tf, candles: self._build_stock_chart_text(
+                        self.stock_data[symbol], tf, candles
+                    ),
+                    ensure_history=lambda tf, candles: self._ensure_stock_chart_history(
+                        symbol, tf, candles
+                    ),
+                )
+            )
+            return
+        if symbol not in self.symbol_data:
+            self.symbol_data[symbol] = SymbolState(symbol=symbol)
+            self.candles[symbol] = deque(maxlen=CANDLE_BUFFER_MAX)
+            for tf in self.crypto_candles_by_tf:
+                self.crypto_candles_by_tf[tf].setdefault(symbol, deque(maxlen=CANDLE_BUFFER_MAX))
         self.push_screen(
             ChartModal(
                 symbol=symbol,
@@ -629,27 +722,26 @@ class NeonQuotesApp(App[None]):
             )
         )
 
-    def _open_stock_chart_for_row(self, row_index: int) -> None:
-        row_index = max(0, min(row_index, len(self.stock_symbols) - 1))
-        symbol = self.stock_symbols[row_index]
-        self.push_screen(
-            ChartModal(
-                symbol=symbol,
-                chart_builder=lambda tf, candles: self._build_stock_chart_text(
-                    self.stock_data[symbol], tf, candles
-                ),
-                ensure_history=lambda tf, candles: self._ensure_stock_chart_history(
-                    symbol, tf, candles
-                ),
-            )
-        )
+    def _open_main_chart_for_row(self, row_index: int) -> None:
+        item = self.main_row_item_by_index.get(row_index)
+        if not item:
+            return
+        symbol, symbol_type = item
+        self._open_chart_for_symbol(symbol, symbol_type)
+
+    def _open_alert_chart_for_row(self, row_index: int) -> None:
+        item = self.alerts_row_item_by_index.get(row_index)
+        if not item:
+            return
+        symbol, symbol_type = item
+        self._open_chart_for_symbol(symbol, symbol_type)
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "crypto_quotes":
-            self._open_chart_for_row(event.cursor_row)
+            self._open_main_chart_for_row(event.cursor_row)
             return
         if event.data_table.id == "stock_quotes":
-            self._open_stock_chart_for_row(event.cursor_row)
+            self._open_alert_chart_for_row(event.cursor_row)
             return
         if event.data_table.id == "news_table":
             self._copy_news_link(event.cursor_row)
@@ -681,6 +773,102 @@ class NeonQuotesApp(App[None]):
         self.news_group_index = (self.news_group_index + 1) % len(self.news_groups)
         self._update_news_panel()
 
+    def _rotate_main_group(self) -> None:
+        if not self.main_group_items:
+            return
+        self.main_group_index = (self.main_group_index + 1) % len(self.main_group_items)
+        self._update_main_group_panel()
+        self._schedule_stock_refresh()
+
+    def _update_main_group_panel(self) -> None:
+        table = self.query_one("#crypto_quotes", DataTable)
+        if not self.main_group_items:
+            self.main_visible_items = []
+            self.main_row_item_by_index.clear()
+            with contextlib.suppress(Exception):
+                table.border_title = " MAIN TABLE "
+            for i, row_key in enumerate(self.main_row_keys):
+                table.update_cell(row_key, self.main_col_keys["symbol"], "-" if i == 0 else "")
+                table.update_cell(row_key, self.main_col_keys["type"], "-")
+                table.update_cell(row_key, self.main_col_keys["price"], "-")
+                table.update_cell(row_key, self.main_col_keys["change"], "-")
+                table.update_cell(row_key, self.main_col_keys["volume"], "-")
+                table.update_cell(row_key, self.main_col_keys["spark"], "")
+            return
+
+        group_name, items = self.main_group_items[self.main_group_index]
+        self.main_visible_items = items
+        self.main_row_item_by_index.clear()
+        with contextlib.suppress(Exception):
+            table.border_title = (
+                f" MAIN TABLE // {group_name} "
+                f"[group {self.main_group_index + 1}/{len(self.main_group_items)}] "
+                f"[updated {self.stocks_last_update}] "
+            )
+
+        for i, row_key in enumerate(self.main_row_keys):
+            if i < len(items):
+                symbol, symbol_type = items[i]
+                self.main_row_item_by_index[i] = (symbol, symbol_type)
+                self._refresh_main_row(symbol, symbol_type)
+                continue
+
+            table.update_cell(row_key, self.main_col_keys["symbol"], "")
+            table.update_cell(row_key, self.main_col_keys["type"], "")
+            table.update_cell(row_key, self.main_col_keys["price"], "")
+            table.update_cell(row_key, self.main_col_keys["change"], "")
+            table.update_cell(row_key, self.main_col_keys["volume"], "")
+            table.update_cell(row_key, self.main_col_keys["spark"], "")
+
+    def _update_alerts_panel(self) -> None:
+        table = self.query_one("#stock_quotes", DataTable)
+        entries: list[tuple[str, str, float, float, float]] = []
+        for symbol, state in self.symbol_data.items():
+            if state.price <= 0 and state.last_update_ms <= 0:
+                continue
+            entries.append((symbol, "crypto", state.change_percent, state.price, state.volume))
+        for symbol, state in self.stock_data.items():
+            if state.price <= 0 and state.last_update_ms <= 0:
+                continue
+            entries.append((symbol, "stock", state.change_percent, state.price, state.volume))
+
+        entries.sort(key=lambda item: abs(item[2]), reverse=True)
+        top = entries[:ALERTS_TABLE_SIZE]
+        self.alerts_row_item_by_index.clear()
+        with contextlib.suppress(Exception):
+            table.border_title = (
+                f" ALERTS TABLE // top {ALERTS_TABLE_SIZE} abs movers "
+                f"[updated {self.stocks_last_update}] "
+            )
+
+        for i, row_key in enumerate(self.alerts_row_keys):
+            table.update_cell(row_key, self.alerts_col_keys["rank"], f"{i + 1}")
+            if i >= len(top):
+                table.update_cell(row_key, self.alerts_col_keys["symbol"], "")
+                table.update_cell(row_key, self.alerts_col_keys["type"], "")
+                table.update_cell(row_key, self.alerts_col_keys["change"], "")
+                table.update_cell(row_key, self.alerts_col_keys["price"], "")
+                table.update_cell(row_key, self.alerts_col_keys["volume"], "")
+                continue
+
+            symbol, symbol_type, change_pct, price, volume = top[i]
+            self.alerts_row_item_by_index[i] = (symbol, symbol_type)
+            color = "#00ffae" if change_pct >= 0 else "#ff5e7a"
+            type_label = "CRYPTO" if symbol_type == "crypto" else "STOCK"
+            table.update_cell(row_key, self.alerts_col_keys["symbol"], symbol)
+            table.update_cell(row_key, self.alerts_col_keys["type"], type_label)
+            table.update_cell(
+                row_key,
+                self.alerts_col_keys["change"],
+                Text(f"{change_pct:>+9.2f}%", style=f"bold {color}"),
+            )
+            table.update_cell(
+                row_key,
+                self.alerts_col_keys["price"],
+                Text(f"{price:>15,.4f}", style=color),
+            )
+            table.update_cell(row_key, self.alerts_col_keys["volume"], f"{volume:>22,.2f}")
+
     async def _preload_history(self) -> None:
         if self.boot_modal:
             self.boot_modal.set_total(len(self.crypto_symbols) + len(self.stock_symbols))
@@ -699,17 +887,25 @@ class NeonQuotesApp(App[None]):
                 self._log(f"[yellow]History warning {symbol}:[/] {exc!r}")
             if self.boot_modal:
                 self.boot_modal.increment()
+        self._update_main_group_panel()
+        self._update_alerts_panel()
         self._log("[#2ec4b6]HISTORY[/] preload complete")
 
     async def _preload_stock_history(self) -> None:
         if not self.stock_symbols:
             return
+        current_group_stocks = [s for s, t in self.main_visible_items if t == "stock"]
+        first_group_stocks: list[str] = []
+        if self.main_group_items:
+            first_group_stocks = [s for s, t in self.main_group_items[0][1] if t == "stock"]
+        preload_symbols = current_group_stocks or first_group_stocks or self.stock_symbols[:20]
         if self.boot_modal:
             self.boot_modal.set_phase("Syncing stock history")
+            self.boot_modal.set_total(len(self.crypto_symbols) + len(preload_symbols))
         self._log(
             f"[#ff9f43]STOCKS HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol..."
         )
-        for symbol in self.stock_symbols:
+        for symbol in preload_symbols:
             try:
                 closes, candles = await asyncio.to_thread(
                     fetch_stock_history, symbol, INITIAL_HISTORY_POINTS, INITIAL_CANDLE_LIMIT
@@ -719,6 +915,8 @@ class NeonQuotesApp(App[None]):
                 self._log(f"[yellow]Stock history warning {symbol}:[/] {exc!r}")
             if self.boot_modal:
                 self.boot_modal.increment()
+        self._update_main_group_panel()
+        self._update_alerts_panel()
         self._log("[#ff9f43]STOCKS HISTORY[/] preload complete")
 
     async def _show_boot_modal(self) -> None:
@@ -740,12 +938,21 @@ class NeonQuotesApp(App[None]):
     async def _refresh_stocks(self) -> None:
         if not self.stock_symbols:
             return
+        visible_stock_symbols = [s for s, t in self.main_visible_items if t == "stock"]
+        symbols_to_refresh = visible_stock_symbols or self.stock_symbols
+        if not symbols_to_refresh:
+            return
         try:
-            quotes = await asyncio.to_thread(fetch_stock_quotes, self.stock_symbols)
+            quotes = await asyncio.to_thread(fetch_stock_quotes, symbols_to_refresh)
             for quote in quotes:
                 self._apply_stock_quote(quote)
             self.stocks_last_update = datetime.now(self.local_tz).strftime("%H:%M")
-            self._log(f"[#2ec4b6]STOCKS[/] refreshed {len(quotes)} symbols")
+            self._update_main_group_panel()
+            self._update_alerts_panel()
+            self._log(
+                f"[#2ec4b6]STOCKS[/] refreshed {len(quotes)} symbols "
+                f"({len(symbols_to_refresh)} in active group)"
+            )
         except Exception as exc:
             self._log(f"[yellow]Stocks warning:[/] {exc!r}")
 
@@ -848,7 +1055,7 @@ class NeonQuotesApp(App[None]):
                 )
             )
 
-        self._refresh_row(state)
+        self._refresh_main_row(symbol, "crypto")
 
     def _seed_stock_history(
         self,
@@ -878,7 +1085,7 @@ class NeonQuotesApp(App[None]):
                     close=close_p,
                 )
             )
-        self._refresh_stock_row(state)
+        self._refresh_main_row(symbol, "stock")
 
     def _resolve_timezone(self) -> ZoneInfo | None:
         if self.timezone:
@@ -1025,11 +1232,11 @@ class NeonQuotesApp(App[None]):
         line = self.query_one("#status_line", Static)
 
         if self.command_mode:
-            left = f":{self.command_buffer}█ | Enter run | Esc normal | q quit | r reset | n news | help"
+            left = f":{self.command_buffer}█ | [Enter] run | [Esc] normal | q quit | r reset | n news | help"
             right = "status: enter command"
             right_style = "#ffcf5c"
         else:
-            left = ":|f2 Cmd | q quit | r reset | n news | enter chart"
+            left = ": [f2] Cmd | q quit | r reset | n news | [enter] chart"
             right = "status: normal"
             right_style = "#00ffae"
 
@@ -1096,7 +1303,8 @@ class NeonQuotesApp(App[None]):
         assert state.points is not None
         state.points.append(quote.price)
         self._update_candles(quote.symbol, quote.price, quote.event_time_ms)
-        self._refresh_row(state)
+        self._refresh_main_row(quote.symbol, "crypto")
+        self._update_alerts_panel()
 
     def _update_candles(self, symbol: str, price: float, event_time_ms: int) -> None:
         series = self.candles[symbol]
@@ -1110,20 +1318,45 @@ class NeonQuotesApp(App[None]):
         candle.low = min(candle.low, price)
         candle.close = price
 
-    def _refresh_row(self, state: SymbolState) -> None:
+    def _refresh_main_row(self, symbol: str, symbol_type: str) -> None:
         table = self.query_one("#crypto_quotes", DataTable)
-        row_key = self.crypto_row_keys.get(state.symbol)
-        if row_key is None or not self.crypto_col_keys:
+        row_index = None
+        for idx, item in self.main_row_item_by_index.items():
+            if item == (symbol, symbol_type):
+                row_index = idx
+                break
+        if row_index is None or not self.main_col_keys or row_index >= len(self.main_row_keys):
             return
-        color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
-        price = Text(f"{state.price:>15,.4f}", style=color)
-        change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
-        volume = f"{state.volume:>22,.2f}"
-        spark = self._sparkline(state.points or deque())
-        table.update_cell(row_key, self.crypto_col_keys["price"], price)
-        table.update_cell(row_key, self.crypto_col_keys["change"], change)
-        table.update_cell(row_key, self.crypto_col_keys["volume"], volume)
-        table.update_cell(row_key, self.crypto_col_keys["spark"], spark)
+        row_key = self.main_row_keys[row_index]
+
+        if symbol_type == "crypto":
+            state = self.symbol_data.get(symbol)
+            if state is None:
+                return
+            color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
+            price = Text(f"{state.price:>15,.4f}", style=color)
+            change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
+            volume = f"{state.volume:>22,.2f}"
+            spark = self._sparkline(state.points or deque())
+            type_label = "CRYPTO"
+        else:
+            state = self.stock_data.get(symbol)
+            if state is None:
+                state = StockState(symbol=symbol)
+                self.stock_data[symbol] = state
+            color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
+            price = Text(f"{state.price:>15,.4f}", style=color)
+            change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
+            volume = f"{state.volume:>22,.0f}"
+            spark = self._sparkline(state.points or deque())
+            type_label = "STOCK"
+
+        table.update_cell(row_key, self.main_col_keys["symbol"], symbol)
+        table.update_cell(row_key, self.main_col_keys["type"], type_label)
+        table.update_cell(row_key, self.main_col_keys["price"], price)
+        table.update_cell(row_key, self.main_col_keys["change"], change)
+        table.update_cell(row_key, self.main_col_keys["volume"], volume)
+        table.update_cell(row_key, self.main_col_keys["spark"], spark)
 
     def _apply_stock_quote(self, quote: StockQuote) -> None:
         state = self.stock_data.get(quote.symbol)
@@ -1136,7 +1369,8 @@ class NeonQuotesApp(App[None]):
         assert state.points is not None
         state.points.append(quote.price)
         self._update_stock_candles(quote.symbol, quote.price, quote.event_time_ms)
-        self._refresh_stock_row(state)
+        self._refresh_main_row(quote.symbol, "stock")
+        self._update_alerts_panel()
 
     def _update_stock_candles(self, symbol: str, price: float, event_time_ms: int) -> None:
         series = self.stock_candles[symbol]
@@ -1152,18 +1386,11 @@ class NeonQuotesApp(App[None]):
         candle.low = min(candle.low, price)
         candle.close = price
 
+    def _refresh_row(self, state: SymbolState) -> None:
+        self._refresh_main_row(state.symbol, "crypto")
+
     def _refresh_stock_row(self, state: StockState) -> None:
-        table = self.query_one("#stock_quotes", DataTable)
-        row_key = self.stock_row_keys.get(state.symbol)
-        if row_key is None or not self.stock_col_keys:
-            return
-        color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
-        price = Text(f"{state.price:>15,.4f}", style=color)
-        change = Text(f"{state.change_percent:>+9.2f}%", style=f"bold {color}")
-        volume = f"{state.volume:>22,.0f}"
-        table.update_cell(row_key, self.stock_col_keys["price"], price)
-        table.update_cell(row_key, self.stock_col_keys["change"], change)
-        table.update_cell(row_key, self.stock_col_keys["volume"], volume)
+        self._refresh_main_row(state.symbol, "stock")
 
     def _sparkline(self, values: deque[float]) -> Text:
         if not values:
@@ -1461,7 +1688,7 @@ class NeonQuotesApp(App[None]):
     def action_reset(self) -> None:
         for symbol in self.crypto_symbols:
             self.symbol_data[symbol] = SymbolState(symbol=symbol)
-            self._refresh_row(self.symbol_data[symbol])
+            self._refresh_main_row(symbol, "crypto")
             for tf in self.crypto_candles_by_tf:
                 self.crypto_candles_by_tf[tf][symbol].clear()
         for symbol in self.stock_symbols:
@@ -1469,7 +1696,9 @@ class NeonQuotesApp(App[None]):
             self.stock_candles[symbol].clear()
             for tf in self.stock_candles_by_tf:
                 self.stock_candles_by_tf[tf][symbol].clear()
-            self._refresh_stock_row(self.stock_data[symbol])
+            self._refresh_main_row(symbol, "stock")
+        self._update_main_group_panel()
+        self._update_alerts_panel()
         self._log("[cyan]Local buffers reset[/]")
 
     def action_focus_symbol(self, symbol: str) -> None:
@@ -1482,8 +1711,10 @@ class NeonQuotesApp(App[None]):
             f"price={state.price:,.4f} change={state.change_percent:+.2f}% volume={state.volume:,.2f}"
         )
         table = self.query_one("#crypto_quotes", DataTable)
-        row_index = self.crypto_symbols.index(symbol)
-        table.move_cursor(row=row_index)
+        for row_index, item in self.main_row_item_by_index.items():
+            if item == (symbol, "crypto"):
+                table.move_cursor(row=row_index)
+                break
 
     async def on_key(self, event: events.Key) -> None:
         if isinstance(self.screen, ChartModal):
@@ -1532,9 +1763,11 @@ def run_app(
     crypto_symbols: Iterable[str] | None = None,
     stock_symbols: Iterable[str] | None = None,
     timezone: str = "",
+    groups: Iterable[dict[str, Any]] | None = None,
 ) -> None:
     NeonQuotesApp(
         crypto_symbols=crypto_symbols,
         stock_symbols=stock_symbols,
         timezone=timezone,
+        groups=groups,
     ).run()
