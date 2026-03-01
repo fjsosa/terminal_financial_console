@@ -71,10 +71,29 @@ Screen {
     dock: bottom;
     height: 3;
     content-align: center middle;
-    border: heavy #2ec4b6;
+    border: round #2ec4b6;
     background: #08111d;
     color: #e9feff;
     text-style: bold;
+    margin: 0 0 1 0;
+}
+
+#status_line {
+    dock: bottom;
+    height: 1;
+    background: #060d15;
+    color: #d7f2ff;
+    padding: 0 1;
+}
+
+#command_input {
+    dock: bottom;
+    height: 3;
+    border: round #1d8aff;
+    background: #071019;
+    color: #d7f2ff;
+    display: none;
+    margin: 0 0 1 0;
 }
 
 Footer {

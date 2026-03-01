@@ -19,7 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, RichLog, Static
+from textual.widgets import DataTable, Input, RichLog, Static
 
 from .config import (
     DEFAULT_CRYPTO_SYMBOLS,
@@ -200,19 +200,32 @@ class BootModal(ModalScreen[None]):
         self.query_one("#boot_box", Static).update(txt)
 
 
+class CommandInput(Input):
+    async def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            app = self.app
+            if isinstance(app, NeonQuotesApp):
+                app.action_exit_command_mode()
+                event.stop()
+                return
+        # Let Input handle all other keys through its own internal bindings.
+
+
 class NeonQuotesApp(App[None]):
     CSS_PATH = "styles.tcss"
     TITLE = "Neon Quotes Terminal"
     SUB_TITLE = "Real-time market feed"
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("r", "reset", "Reset"),
-        Binding("n", "refresh_news", "News"),
+        Binding("q", "quick_quit", "Quit", priority=True),
+        Binding("r", "quick_reset", "Reset", priority=True),
+        Binding("n", "quick_news", "News", priority=True),
         Binding("enter", "open_chart", "Chart"),
-        Binding("1", "focus_symbol('BTCUSDT')", "BTC"),
-        Binding("2", "focus_symbol('ETHUSDT')", "ETH"),
-        Binding("3", "focus_symbol('SOLUSDT')", "SOL"),
+        Binding("colon", "enter_command_mode", show=False, priority=True, system=True),
+        Binding("f2", "enter_command_mode", show=False, priority=True, system=True),
+        Binding("ctrl+g", "enter_command_mode", show=False, priority=True, system=True),
+        Binding("escape", "exit_command_mode", show=False, priority=True, system=True),
+        Binding("a", "show_help_tip", "Help", priority=True),
     ]
 
     heartbeat = reactive(False)
@@ -255,6 +268,9 @@ class NeonQuotesApp(App[None]):
         }
         self.boot_modal: BootModal | None = None
         self.startup_task: asyncio.Task[None] | None = None
+        self.command_mode = False
+        self.command_buffer = ""
+        self.status_hint = ":|f2 Cmd | q quit | r reset | n news | enter chart"
 
     def compose(self) -> ComposeResult:
         yield Static(id="header")
@@ -267,7 +283,8 @@ class NeonQuotesApp(App[None]):
                 yield Static(id="news_header")
                 yield DataTable(id="news_table")
         yield Static(id="ticker")
-        yield Footer()
+        yield Static(id="status_line")
+        yield CommandInput(placeholder=":q | :r | :n | :help", id="command_input")
 
     async def on_mount(self) -> None:
         crypto_table = self.query_one("#crypto_quotes", DataTable)
@@ -337,6 +354,10 @@ class NeonQuotesApp(App[None]):
         self.query_one("#news_header", Static).update(
             Text("NEWS // finviz.com (refresh 10m)", style="#7aa3c5")
         )
+        command_input = self.query_one("#command_input", Input)
+        command_input.value = ""
+        command_input.display = False
+        self._render_status_line()
 
         self.set_interval(0.5, self._update_clock)
         self.set_interval(0.15, self._animate_ticker)
@@ -386,6 +407,7 @@ class NeonQuotesApp(App[None]):
             f"[#ffcf5c]latency~{age_ms}ms[/]"
         )
         self.query_one("#header", Static).update(header)
+        self._render_status_line()
 
     def _animate_ticker(self) -> None:
         chunks: list[str] = []
@@ -445,6 +467,31 @@ class NeonQuotesApp(App[None]):
     def action_refresh_news(self) -> None:
         self._log("[#2ec4b6]NEWS[/] manual refresh requested")
         self._schedule_news_refresh()
+
+    def action_quick_quit(self) -> None:
+        if not self.command_mode:
+            self.exit()
+
+    def action_quick_reset(self) -> None:
+        if not self.command_mode:
+            self.action_reset()
+
+    def action_quick_news(self) -> None:
+        if not self.command_mode:
+            self.action_refresh_news()
+
+    def action_enter_command_mode(self) -> None:
+        if not self.command_mode:
+            self._enter_command_mode()
+
+    def action_exit_command_mode(self) -> None:
+        if self.command_mode:
+            self._exit_command_mode()
+
+    def action_show_help_tip(self) -> None:
+        self._log(
+            "[#ffcf5c]Tip:[/] Enter chart on focused table; ':' command mode; commands: :q :r :n :help"
+        )
 
     def action_open_chart(self) -> None:
         news_table = self.query_one("#news_table", DataTable)
@@ -770,6 +817,91 @@ class NeonQuotesApp(App[None]):
         except Exception:
             return False
         return False
+
+    def _enter_command_mode(self) -> None:
+        self.command_mode = True
+        self.command_buffer = ""
+        self._log("[#ffcf5c]COMMAND[/] mode enabled")
+        command_input = self.query_one("#command_input", Input)
+        command_input.display = True
+        command_input.value = ":"
+        command_input.focus()
+        self._render_status_line()
+
+    def _exit_command_mode(self) -> None:
+        self.command_mode = False
+        self.command_buffer = ""
+        self._log("[#ffcf5c]COMMAND[/] mode disabled")
+        command_input = self.query_one("#command_input", Input)
+        command_input.value = ""
+        command_input.display = False
+        self.query_one("#crypto_quotes", DataTable).focus()
+        self._render_status_line()
+
+    def _render_status_line(self) -> None:
+        line = self.query_one("#status_line", Static)
+
+        if self.command_mode:
+            left = f":{self.command_buffer}█ | Enter run | Esc normal | q quit | r reset | n news | help"
+            right = "status: enter command"
+            right_style = "#ffcf5c"
+        else:
+            left = ":|f2 Cmd | q quit | r reset | n news | enter chart"
+            right = "status: normal"
+            right_style = "#00ffae"
+
+        total_width = max(40, self.size.width - 2)
+        max_left = max(1, total_width - len(right) - 1)
+        if len(left) > max_left:
+            left = left[:max_left] if max_left <= 1 else (left[: max_left - 1] + "…")
+        spaces = max(1, total_width - len(left) - len(right))
+        txt = Text()
+        txt.append(left, style="#d7f2ff")
+        txt.append(" " * spaces, style="#6f8aa8")
+        txt.append(right, style=f"bold {right_style}")
+        line.update(txt)
+
+    def _execute_command(self, command: str) -> None:
+        cmd = command.strip().lower()
+        if not cmd:
+            return
+        if cmd == "q":
+            self.exit()
+            return
+        if cmd == "r":
+            self.action_reset()
+            return
+        if cmd == "n":
+            self.action_refresh_news()
+            return
+        if cmd == "help":
+            self._log("[#ffcf5c]Commands:[/] :q :r :n :help")
+            return
+        self._log(f"[yellow]Command unknown:[/] :{cmd}")
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "command_input":
+            return
+        raw = (event.value or "").strip()
+        if raw.startswith(":"):
+            raw = raw[1:].strip()
+        if not raw:
+            event.input.value = ""
+            self._exit_command_mode()
+            return
+        self._execute_command(raw)
+        event.input.value = ""
+        self._exit_command_mode()
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "command_input":
+            return
+        value = event.value or ""
+        if value.startswith(":"):
+            value = value[1:]
+        self.command_buffer = value
+        if self.command_mode:
+            self._render_status_line()
 
     def _apply_quote(self, quote: Quote) -> None:
         self.last_tick_ms = quote.event_time_ms
@@ -1138,8 +1270,38 @@ class NeonQuotesApp(App[None]):
         table.move_cursor(row=row_index)
 
     async def on_key(self, event: events.Key) -> None:
+        if self.command_mode:
+            if event.key == "escape":
+                self._exit_command_mode()
+                event.stop()
+                return
+            # Let Input widget handle typing/submission in command mode.
+            return
+
+        if event.character == ":" or event.key in {":", "colon"}:
+            self._enter_command_mode()
+            event.stop()
+            return
+        if event.key == "q":
+            self.exit()
+            return
+        if event.key == "r":
+            self.action_reset()
+            return
+        if event.key == "n":
+            self.action_refresh_news()
+            return
+        if event.key == "1":
+            self.action_focus_symbol("BTCUSDT")
+            return
+        if event.key == "2":
+            self.action_focus_symbol("ETHUSDT")
+            return
+        if event.key == "3":
+            self.action_focus_symbol("SOLUSDT")
+            return
         if event.key == "a":
-            self._log("[#ffcf5c]Tip:[/] Enter opens chart on crypto/stocks and copies link on news table; [t] toggles 15m/1h in modal.")
+            self.action_show_help_tip()
 
 
 def run_app(
