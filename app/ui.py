@@ -22,19 +22,24 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, RichLog, Static
 
 from .config import (
+    CACHE_TTL_SECONDS,
+    CHART_HISTORY_POINTS,
     DEFAULT_CRYPTO_SYMBOLS,
     DEFAULT_STOCK_SYMBOLS,
     INITIAL_CANDLE_LIMIT,
     INITIAL_HISTORY_POINTS,
     MAX_EVENTS,
     MAX_POINTS,
+    NAME_CACHE_TTL_SECONDS,
     NEWS_GROUP_ROTATE_SECONDS,
     NEWS_GROUP_SIZE,
     NEWS_MAX_ITEMS,
     NEWS_REFRESH_SECONDS,
+    STARTUP_IO_CONCURRENCY,
     STOCK_GROUP_ROTATE_SECONDS,
     STOCKS_REFRESH_SECONDS,
 )
+from .cache import load_names_cache, load_symbol_history_cache, save_names_cache, save_symbol_history_cache
 from .feed import BinanceTickerFeed
 from .i18n import format_time_local, set_language, tr
 from .models import Quote
@@ -45,6 +50,7 @@ from .stocks import (
     fetch_stock_history,
     fetch_stock_quotes,
 )
+from .symbol_names import resolve_symbol_names, update_config_group_names
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
@@ -368,18 +374,20 @@ class NeonQuotesApp(App[None]):
         language: str = "es",
         groups: Iterable[dict[str, Any]] | None = None,
         symbol_names: dict[tuple[str, str], str] | None = None,
-        startup_logs: Iterable[str] | None = None,
+        config_path: str = "config.yml",
+        symbols_from_config: bool = True,
     ) -> None:
         super().__init__()
         self.crypto_symbols = list(crypto_symbols or DEFAULT_CRYPTO_SYMBOLS)
         self.stock_symbols = [symbol.upper() for symbol in (stock_symbols or DEFAULT_STOCK_SYMBOLS)]
         self.market_groups = list(groups or [])
         self.symbol_names = dict(symbol_names or {})
-        self.startup_logs = list(startup_logs or [])
+        self.config_path = config_path
+        self.symbols_from_config = symbols_from_config
         self.timezone = timezone.strip()
         self.language = (language or "es").strip().lower()
         set_language(self.language)
-        self.feed = BinanceTickerFeed(self.crypto_symbols)
+        self.feed = BinanceTickerFeed([])
         self.symbol_data = {symbol: SymbolState(symbol=symbol) for symbol in self.crypto_symbols}
         self.stock_data = {symbol: StockState(symbol=symbol) for symbol in self.stock_symbols}
         self.feed_task: asyncio.Task[None] | None = None
@@ -420,6 +428,8 @@ class NeonQuotesApp(App[None]):
         }
         self.boot_modal: BootModal | None = None
         self.startup_task: asyncio.Task[None] | None = None
+        self.lazy_history_task: asyncio.Task[None] | None = None
+        self.name_resolve_task: asyncio.Task[None] | None = None
         self.command_mode = False
         self.command_buffer = ""
         self.status_hint = f":|f2 {tr('Cmd')} | q {tr('quit')} | r {tr('reset')} | n {tr('news')} | enter {tr('chart')}"
@@ -442,9 +452,9 @@ class NeonQuotesApp(App[None]):
         main_table = self.query_one("#crypto_quotes", DataTable)
         main_table.cursor_type = "row"
         main_table.zebra_stripes = True
-        col_symbol = main_table.add_column(tr("Ticker"))
-        col_type = main_table.add_column(tr("Type"), width=8)
-        col_price = main_table.add_column(tr("Price"), width=15)
+        col_symbol = main_table.add_column(tr("Ticker"), width=20)
+        col_type = main_table.add_column(tr("Type"), width=4)
+        col_price = main_table.add_column(tr("Price"), width=13)
         col_change = main_table.add_column("24h %", width=9)
         col_volume = main_table.add_column(tr("Volume"), width=17)
         col_spark = main_table.add_column(tr("Spark"))
@@ -466,14 +476,12 @@ class NeonQuotesApp(App[None]):
         alerts_table = self.query_one("#stock_quotes", DataTable)
         alerts_table.cursor_type = "row"
         alerts_table.zebra_stripes = True
-        a_rank = alerts_table.add_column("#", width=3)
-        a_symbol = alerts_table.add_column(tr("Ticker"))
-        a_type = alerts_table.add_column(tr("Type"), width=8)
+        a_symbol = alerts_table.add_column(tr("Ticker"), width=20)
+        a_type = alerts_table.add_column(tr("Type"), width=4)
         a_change = alerts_table.add_column("24h %", width=9)
-        a_price = alerts_table.add_column(tr("Price"), width=15)
+        a_price = alerts_table.add_column(tr("Price"), width=13)
         a_volume = alerts_table.add_column(tr("Volume"), width=17)
         self.alerts_col_keys = {
-            "rank": a_rank,
             "symbol": a_symbol,
             "type": a_type,
             "change": a_change,
@@ -483,7 +491,6 @@ class NeonQuotesApp(App[None]):
         self.alerts_row_keys.clear()
         for i in range(ALERTS_TABLE_SIZE):
             row_key = alerts_table.add_row(
-                f"{i + 1}",
                 "-",
                 "-",
                 "-",
@@ -522,8 +529,9 @@ class NeonQuotesApp(App[None]):
         events_log = self.query_one("#events", RichLog)
         events_log.max_lines = MAX_EVENTS
         self._log(tr("Booting market stream..."))
-        for line in self.startup_logs:
-            self._log(line)
+        self._load_cached_symbol_names()
+        self._log("[#6f8aa8]NAMES[/] resolving symbol names in background...")
+        self.name_resolve_task = asyncio.create_task(self._resolve_names_background())
         self.query_one("#news_header", Static).update(
             Text("NEWS // finviz.com (refresh 10m)", style="#7aa3c5")
         )
@@ -545,28 +553,74 @@ class NeonQuotesApp(App[None]):
             self.startup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.startup_task
+        if self.lazy_history_task:
+            self.lazy_history_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.lazy_history_task
+        if self.name_resolve_task:
+            self.name_resolve_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.name_resolve_task
         if self.feed_task:
             self.feed_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.feed_task
+
+    def _load_cached_symbol_names(self) -> None:
+        cached = load_names_cache(NAME_CACHE_TTL_SECONDS)
+        if not cached:
+            self._log("[#6f8aa8]NAMES[/] no fresh local cache")
+            return
+        self.symbol_names.update(cached)
+        self._log(f"[#2ec4b6]NAMES[/] loaded {len(cached)} cached names")
+
+    async def _resolve_names_background(self) -> None:
+        try:
+            groups, names, stats = await asyncio.to_thread(resolve_symbol_names, self.market_groups)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            self._log(f"[yellow]Names warning:[/] {exc!r}")
+            return
+
+        self.market_groups = groups
+        self.symbol_names.update(names)
+        save_names_cache(self.symbol_names)
+        self._log(
+            f"[#2ec4b6]NAMES[/] stocks={stats['stocks_total']} "
+            f"(missing={stats['stocks_missing_name']}, resolved={stats['stocks_resolved_remote']})"
+        )
+        self._log(
+            f"[#2ec4b6]NAMES[/] crypto={stats['crypto_total']} "
+            f"(missing={stats['crypto_missing_name']}, resolved={stats['crypto_resolved_remote']})"
+        )
+
+        if self.symbols_from_config:
+            updated = await asyncio.to_thread(update_config_group_names, self.config_path, groups)
+            if updated:
+                self._log("[#2ec4b6]CONFIG[/] symbol names persisted to config.yml")
+            else:
+                self._log("[#6f8aa8]CONFIG[/] no symbol name changes to persist")
+        else:
+            self._log("[#6f8aa8]CONFIG[/] symbols from CLI/env, names kept in memory")
+
+        self._update_main_group_panel()
+        self._update_alerts_panel()
 
     async def _startup_sequence(self) -> None:
         try:
             # Let first frame render before opening boot modal.
             await asyncio.sleep(0)
             await self._show_boot_modal()
-            await self._preload_history()
-            await self._preload_stock_history()
+            await self._preload_visible_group_history()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self._log(f"[yellow]Startup warning:[/] {exc!r}")
         finally:
             await self._hide_boot_modal()
-            if self.feed_task is None and self.crypto_symbols:
-                self.feed_task = asyncio.create_task(self._consume_feed())
-            elif not self.crypto_symbols:
-                self.status_text = "STOCKS ONLY"
+            await self._refresh_crypto_stream_for_visible_group()
+            self.lazy_history_task = asyncio.create_task(self._load_remaining_history_in_background())
             self._schedule_news_refresh()
             self._schedule_stock_refresh()
 
@@ -789,6 +843,30 @@ class NeonQuotesApp(App[None]):
         self.main_group_index = (self.main_group_index + 1) % len(self.main_group_items)
         self._update_main_group_panel()
         self._schedule_stock_refresh()
+        asyncio.create_task(self._refresh_crypto_stream_for_visible_group())
+        if self.lazy_history_task and not self.lazy_history_task.done():
+            self.lazy_history_task.cancel()
+        self.lazy_history_task = asyncio.create_task(self._load_remaining_history_in_background())
+
+    async def _refresh_crypto_stream_for_visible_group(self) -> None:
+        desired = [s for s, t in self.main_visible_items if t == "crypto"]
+        desired = [s.upper() for s in desired if s]
+        current = [s.upper() for s in self.feed.symbols]
+        if desired == current and self.feed_task is not None:
+            return
+
+        if self.feed_task:
+            self.feed_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.feed_task
+            self.feed_task = None
+
+        if not desired:
+            self.status_text = "STOCKS ONLY"
+            return
+
+        self.feed = BinanceTickerFeed(desired)
+        self.feed_task = asyncio.create_task(self._consume_feed())
 
     def _update_main_group_panel(self) -> None:
         table = self.query_one("#crypto_quotes", DataTable)
@@ -860,7 +938,6 @@ class NeonQuotesApp(App[None]):
             )
 
         for i, row_key in enumerate(self.alerts_row_keys):
-            table.update_cell(row_key, self.alerts_col_keys["rank"], f"{i + 1}")
             if i >= len(top):
                 table.update_cell(row_key, self.alerts_col_keys["symbol"], "")
                 table.update_cell(row_key, self.alerts_col_keys["type"], "")
@@ -872,7 +949,7 @@ class NeonQuotesApp(App[None]):
             symbol, symbol_type, change_pct, price, volume = top[i]
             self.alerts_row_item_by_index[i] = (symbol, symbol_type)
             color = "#00ffae" if change_pct >= 0 else "#ff5e7a"
-            type_label = "CRYPTO" if symbol_type == "crypto" else "STOCK"
+            type_label = "CRT" if symbol_type == "crypto" else "STK"
             table.update_cell(row_key, self.alerts_col_keys["symbol"], self._ticker_label(symbol, symbol_type))
             table.update_cell(row_key, self.alerts_col_keys["type"], type_label)
             table.update_cell(
@@ -883,9 +960,9 @@ class NeonQuotesApp(App[None]):
             table.update_cell(
                 row_key,
                 self.alerts_col_keys["price"],
-                Text(f"{price:>15,.4f}", style=color),
+                Text(f"{price:>13,.2f}", style=color),
             )
-            table.update_cell(row_key, self.alerts_col_keys["volume"], f"{volume:>17,.2f}")
+            table.update_cell(row_key, self.alerts_col_keys["volume"], self._format_volume(volume, 17))
 
     def _get_change_percent(self, symbol: str, symbol_type: str) -> float:
         if symbol_type == "crypto":
@@ -894,55 +971,182 @@ class NeonQuotesApp(App[None]):
         state = self.stock_data.get(symbol)
         return state.change_percent if state is not None else -9999.0
 
-    async def _preload_history(self) -> None:
-        if self.boot_modal:
-            self.boot_modal.set_total(len(self.crypto_symbols) + len(self.stock_symbols))
-            self.boot_modal.set_phase(tr("Syncing crypto history"))
-        self._log(f"[#2ec4b6]HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol...")
-        for symbol in self.crypto_symbols:
-            try:
-                closes = await asyncio.to_thread(
-                    self.feed.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
-                )
-                candles_raw = await asyncio.to_thread(
-                    self.feed.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
-                )
-                self._seed_symbol_history(symbol, closes, candles_raw)
-            except Exception as exc:
-                self._log(f"[yellow]History warning {symbol}:[/] {exc!r}")
-            if self.boot_modal:
-                self.boot_modal.increment()
-        self._update_main_group_panel()
-        self._update_alerts_panel()
-        self._log("[#2ec4b6]HISTORY[/] preload complete")
+    def _current_visible_symbols(self) -> tuple[list[str], list[str]]:
+        visible_crypto = [s for s, t in self.main_visible_items if t == "crypto"]
+        visible_stock = [s for s, t in self.main_visible_items if t == "stock"]
+        return visible_crypto, visible_stock
 
-    async def _preload_stock_history(self) -> None:
-        if not self.stock_symbols:
-            return
-        current_group_stocks = [s for s, t in self.main_visible_items if t == "stock"]
-        first_group_stocks: list[str] = []
-        if self.main_group_items:
-            first_group_stocks = [s for s, t in self.main_group_items[0][1] if t == "stock"]
-        preload_symbols = current_group_stocks or first_group_stocks or self.stock_symbols[:20]
+    async def _preload_visible_group_history(self) -> None:
+        visible_crypto, visible_stock = self._current_visible_symbols()
+        visible_crypto = visible_crypto or self.crypto_symbols[:10]
+        visible_stock = visible_stock or self.stock_symbols[:10]
+        total = len(visible_crypto) + len(visible_stock)
         if self.boot_modal:
-            self.boot_modal.set_phase(tr("Syncing stock history"))
-            self.boot_modal.set_total(len(self.crypto_symbols) + len(preload_symbols))
-        self._log(
-            f"[#ff9f43]STOCKS HISTORY[/] loading recent {INITIAL_HISTORY_POINTS} quotes per symbol..."
-        )
-        for symbol in preload_symbols:
-            try:
-                closes, candles = await asyncio.to_thread(
-                    fetch_stock_history, symbol, INITIAL_HISTORY_POINTS, INITIAL_CANDLE_LIMIT
-                )
-                self._seed_stock_history(symbol, closes, candles)
-            except Exception as exc:
-                self._log(f"[yellow]Stock history warning {symbol}:[/] {exc!r}")
-            if self.boot_modal:
-                self.boot_modal.increment()
+            self.boot_modal.set_total(max(1, total))
+            self.boot_modal.set_phase(tr("Syncing crypto history"))
+
+        # 1) Instant load from cache when available.
+        cache_hits = 0
+        for symbol in visible_crypto:
+            cached = load_symbol_history_cache(symbol, "crypto", CACHE_TTL_SECONDS)
+            if not cached:
+                continue
+            closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
+            candles = [
+                (int(ts), float(o), float(h), float(l), float(c))
+                for ts, o, h, l, c in cached.get("candles", [])
+            ]
+            self._seed_symbol_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
+            cache_hits += 1
+        for symbol in visible_stock:
+            cached = load_symbol_history_cache(symbol, "stock", CACHE_TTL_SECONDS)
+            if not cached:
+                continue
+            closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
+            candles = [
+                (int(ts), float(o), float(h), float(l), float(c))
+                for ts, o, h, l, c in cached.get("candles", [])
+            ]
+            self._seed_stock_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
+            cache_hits += 1
+
+        if cache_hits:
+            self._log(f"[#2ec4b6]CACHE[/] loaded {cache_hits} symbol histories")
+
+        # 2) Remote refresh for visible symbols with concurrency limit.
+        sem = asyncio.Semaphore(STARTUP_IO_CONCURRENCY)
+
+        async def fetch_crypto(symbol: str) -> None:
+            async with sem:
+                try:
+                    closes = await asyncio.to_thread(
+                        self.feed.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
+                    )
+                    candles = await asyncio.to_thread(
+                        self.feed.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
+                    )
+                    self._seed_symbol_history(symbol, closes, candles)
+                    await asyncio.to_thread(
+                        save_symbol_history_cache,
+                        symbol,
+                        "crypto",
+                        closes=closes,
+                        candles=candles,
+                    )
+                except Exception as exc:
+                    self._log(f"[yellow]History warning {symbol}:[/] {exc!r}")
+                finally:
+                    if self.boot_modal:
+                        self.boot_modal.increment()
+
+        async def fetch_stock(symbol: str) -> None:
+            async with sem:
+                try:
+                    closes, candles = await asyncio.to_thread(
+                        fetch_stock_history,
+                        symbol,
+                        INITIAL_HISTORY_POINTS,
+                        INITIAL_CANDLE_LIMIT,
+                    )
+                    self._seed_stock_history(symbol, closes, candles)
+                    await asyncio.to_thread(
+                        save_symbol_history_cache,
+                        symbol,
+                        "stock",
+                        closes=closes,
+                        candles=candles,
+                    )
+                except Exception as exc:
+                    self._log(f"[yellow]Stock history warning {symbol}:[/] {exc!r}")
+                finally:
+                    if self.boot_modal:
+                        self.boot_modal.increment()
+
+        tasks = [asyncio.create_task(fetch_crypto(s)) for s in visible_crypto]
+        tasks.extend(asyncio.create_task(fetch_stock(s)) for s in visible_stock)
+        if tasks:
+            await asyncio.gather(*tasks)
         self._update_main_group_panel()
         self._update_alerts_panel()
-        self._log("[#ff9f43]STOCKS HISTORY[/] preload complete")
+        self._log("[#2ec4b6]HISTORY[/] visible group preload complete")
+
+    async def _load_remaining_history_in_background(self) -> None:
+        # Lazy fill for symbols outside the visible window.
+        visible_crypto, visible_stock = self._current_visible_symbols()
+        remaining_crypto = [s for s in self.crypto_symbols if s not in set(visible_crypto)]
+        remaining_stock = [s for s in self.stock_symbols if s not in set(visible_stock)]
+        if not remaining_crypto and not remaining_stock:
+            return
+
+        self._log(
+            f"[#6f8aa8]HISTORY[/] lazy background load started "
+            f"(crypto={len(remaining_crypto)} stock={len(remaining_stock)})"
+        )
+        sem = asyncio.Semaphore(STARTUP_IO_CONCURRENCY)
+
+        async def fill_crypto(symbol: str) -> None:
+            cached = load_symbol_history_cache(symbol, "crypto", CACHE_TTL_SECONDS)
+            if cached:
+                closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
+                candles = [
+                    (int(ts), float(o), float(h), float(l), float(c))
+                    for ts, o, h, l, c in cached.get("candles", [])
+                ]
+                self._seed_symbol_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
+                return
+            async with sem:
+                try:
+                    closes = await asyncio.to_thread(
+                        self.feed.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
+                    )
+                    candles = await asyncio.to_thread(
+                        self.feed.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
+                    )
+                    self._seed_symbol_history(symbol, closes, candles)
+                    await asyncio.to_thread(
+                        save_symbol_history_cache,
+                        symbol,
+                        "crypto",
+                        closes=closes,
+                        candles=candles,
+                    )
+                except Exception:
+                    return
+
+        async def fill_stock(symbol: str) -> None:
+            cached = load_symbol_history_cache(symbol, "stock", CACHE_TTL_SECONDS)
+            if cached:
+                closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
+                candles = [
+                    (int(ts), float(o), float(h), float(l), float(c))
+                    for ts, o, h, l, c in cached.get("candles", [])
+                ]
+                self._seed_stock_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
+                return
+            async with sem:
+                try:
+                    closes, candles = await asyncio.to_thread(
+                        fetch_stock_history,
+                        symbol,
+                        INITIAL_HISTORY_POINTS,
+                        INITIAL_CANDLE_LIMIT,
+                    )
+                    self._seed_stock_history(symbol, closes, candles)
+                    await asyncio.to_thread(
+                        save_symbol_history_cache,
+                        symbol,
+                        "stock",
+                        closes=closes,
+                        candles=candles,
+                    )
+                except Exception:
+                    return
+
+        tasks = [asyncio.create_task(fill_crypto(s)) for s in remaining_crypto]
+        tasks.extend(asyncio.create_task(fill_stock(s)) for s in remaining_stock)
+        if tasks:
+            await asyncio.gather(*tasks)
+        self._log("[#6f8aa8]HISTORY[/] lazy background load completed")
 
     async def _show_boot_modal(self) -> None:
         self.boot_modal = BootModal()
@@ -987,28 +1191,50 @@ class NeonQuotesApp(App[None]):
         series = self._get_crypto_series(symbol, timeframe)
         if series is None:
             return
-        required = min(CANDLE_BUFFER_MAX, max(INITIAL_CANDLE_LIMIT, target_candles + 8))
+        required = min(CANDLE_BUFFER_MAX, max(CHART_HISTORY_POINTS, target_candles + 24))
         if len(series) >= required:
-            return
+            # Ensure line chart has enough points as well.
+            state = self.symbol_data.get(symbol)
+            if state is not None and state.points is not None and len(state.points) >= CHART_HISTORY_POINTS:
+                return
 
         candles_raw = await asyncio.to_thread(self.feed.fetch_recent_ohlc, symbol, timeframe, required)
-        if not candles_raw:
-            return
-        fresh = deque(maxlen=CANDLE_BUFFER_MAX)
-        for open_ts, open_p, high_p, low_p, close_p in candles_raw:
-            fresh.append(
-                Candle(
-                    bucket_ms=open_ts,
-                    open=open_p,
-                    high=high_p,
-                    low=low_p,
-                    close=close_p,
+        if candles_raw:
+            fresh = deque(maxlen=CANDLE_BUFFER_MAX)
+            for open_ts, open_p, high_p, low_p, close_p in candles_raw:
+                fresh.append(
+                    Candle(
+                        bucket_ms=open_ts,
+                        open=open_p,
+                        high=high_p,
+                        low=low_p,
+                        close=close_p,
+                    )
                 )
-            )
+            if timeframe == "15m":
+                self.candles[symbol] = fresh
+            else:
+                self.crypto_candles_by_tf[timeframe][symbol] = fresh
+
         if timeframe == "15m":
-            self.candles[symbol] = fresh
-            return
-        self.crypto_candles_by_tf[timeframe][symbol] = fresh
+            closes = await asyncio.to_thread(self.feed.fetch_recent_closes, symbol, CHART_HISTORY_POINTS)
+            if closes:
+                state = self.symbol_data.get(symbol)
+                if state is not None and state.points is not None:
+                    state.points.clear()
+                    for _, close_price in closes[-MAX_POINTS:]:
+                        state.points.append(close_price)
+                candles_for_cache = [
+                    (c.bucket_ms, c.open, c.high, c.low, c.close)
+                    for c in list(self.candles.get(symbol, deque()))[-CHART_HISTORY_POINTS:]
+                ]
+                await asyncio.to_thread(
+                    save_symbol_history_cache,
+                    symbol,
+                    "crypto",
+                    closes=closes[-CHART_HISTORY_POINTS:],
+                    candles=candles_for_cache,
+                )
 
     async def _ensure_stock_chart_history(
         self, symbol: str, timeframe: str, target_candles: int
@@ -1016,28 +1242,51 @@ class NeonQuotesApp(App[None]):
         series = self._get_stock_series(symbol, timeframe)
         if series is None:
             return
-        required = min(CANDLE_BUFFER_MAX, max(INITIAL_CANDLE_LIMIT, target_candles + 8))
+        required = min(CANDLE_BUFFER_MAX, max(CHART_HISTORY_POINTS, target_candles + 24))
         if len(series) >= required:
-            return
+            state = self.stock_data.get(symbol)
+            if state is not None and state.points is not None and len(state.points) >= CHART_HISTORY_POINTS:
+                return
 
         candles_raw = await asyncio.to_thread(fetch_stock_candles_timeframe, symbol, timeframe, required)
-        if not candles_raw:
-            return
-        fresh = deque(maxlen=CANDLE_BUFFER_MAX)
-        for open_ts, open_p, high_p, low_p, close_p in candles_raw:
-            fresh.append(
-                Candle(
-                    bucket_ms=open_ts,
-                    open=open_p,
-                    high=high_p,
-                    low=low_p,
-                    close=close_p,
+        if candles_raw:
+            fresh = deque(maxlen=CANDLE_BUFFER_MAX)
+            for open_ts, open_p, high_p, low_p, close_p in candles_raw:
+                fresh.append(
+                    Candle(
+                        bucket_ms=open_ts,
+                        open=open_p,
+                        high=high_p,
+                        low=low_p,
+                        close=close_p,
+                    )
                 )
-            )
+            if timeframe == "15m":
+                self.stock_candles[symbol] = fresh
+            else:
+                self.stock_candles_by_tf[timeframe][symbol] = fresh
+
         if timeframe == "15m":
-            self.stock_candles[symbol] = fresh
-            return
-        self.stock_candles_by_tf[timeframe][symbol] = fresh
+            closes, _ = await asyncio.to_thread(
+                fetch_stock_history, symbol, CHART_HISTORY_POINTS, INITIAL_CANDLE_LIMIT
+            )
+            if closes:
+                state = self.stock_data.get(symbol)
+                if state is not None and state.points is not None:
+                    state.points.clear()
+                    for _, close_price in closes[-MAX_POINTS:]:
+                        state.points.append(close_price)
+                candles_for_cache = [
+                    (c.bucket_ms, c.open, c.high, c.low, c.close)
+                    for c in list(self.stock_candles.get(symbol, deque()))[-CHART_HISTORY_POINTS:]
+                ]
+                await asyncio.to_thread(
+                    save_symbol_history_cache,
+                    symbol,
+                    "stock",
+                    closes=closes[-CHART_HISTORY_POINTS:],
+                    candles=candles_for_cache,
+                )
 
     def _get_crypto_series(self, symbol: str, timeframe: str) -> deque[Candle] | None:
         if timeframe == "15m":
@@ -1365,22 +1614,22 @@ class NeonQuotesApp(App[None]):
             if state is None:
                 return
             color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
-            price = Text(f"{state.price:>15,.4f}", style=color)
+            price = Text(f"{state.price:>13,.2f}", style=color)
             change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
-            volume = f"{state.volume:>17,.2f}"
+            volume = self._format_volume(state.volume, 17)
             spark = self._sparkline(state.points or deque())
-            type_label = "CRYPTO"
+            type_label = "CRT"
         else:
             state = self.stock_data.get(symbol)
             if state is None:
                 state = StockState(symbol=symbol)
                 self.stock_data[symbol] = state
             color = "#00ffae" if state.change_percent >= 0 else "#ff5e7a"
-            price = Text(f"{state.price:>15,.4f}", style=color)
+            price = Text(f"{state.price:>13,.2f}", style=color)
             change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
-            volume = f"{state.volume:>17,.0f}"
+            volume = self._format_volume(state.volume, 17)
             spark = self._sparkline(state.points or deque())
-            type_label = "STOCK"
+            type_label = "STK"
 
         table.update_cell(row_key, self.main_col_keys["symbol"], self._ticker_label(symbol, symbol_type))
         table.update_cell(row_key, self.main_col_keys["type"], type_label)
@@ -1428,6 +1677,12 @@ class NeonQuotesApp(App[None]):
         if not name:
             return symbol
         return f"{symbol}:{name[:10]}"
+
+    def _format_volume(self, volume: float, width: int = 17) -> str:
+        if abs(volume) >= 100_000_000:
+            numeric_width = max(1, width - 1)
+            return f"{(volume / 1_000_000):>{numeric_width}.2f}M"
+        return f"{volume:>{width},.2f}"
 
     def _sparkline(self, values: deque[float]) -> Text:
         if not values:
@@ -1808,8 +2063,8 @@ def run_app(
     timezone: str = "",
     language: str = "es",
     groups: Iterable[dict[str, Any]] | None = None,
-    symbol_names: dict[tuple[str, str], str] | None = None,
-    startup_logs: Iterable[str] | None = None,
+    config_path: str = "config.yml",
+    symbols_from_config: bool = True,
 ) -> None:
     NeonQuotesApp(
         crypto_symbols=crypto_symbols,
@@ -1817,6 +2072,6 @@ def run_app(
         timezone=timezone,
         language=language,
         groups=groups,
-        symbol_names=symbol_names,
-        startup_logs=startup_logs,
+        config_path=config_path,
+        symbols_from_config=symbols_from_config,
     ).run()

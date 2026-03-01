@@ -6,10 +6,13 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
 
 - Interfaz TUI moderna con `Textual`
 - Tabla principal con rotacion automatica de grupos definidos en `config.yml` (mixto crypto/stocks)
-- Tabla de alertas con top 15 variaciones absolutas (positivas y negativas)
+- Tabla de alertas (`ALERTAS`) con top 15 por variacion `24h %` (orden descendente)
 - Cotizaciones crypto en vivo por WebSocket publico de Binance
 - Cotizaciones de acciones via `yfinance` (refresh periodico)
 - Columna `Spark` en tabla principal con evolucion en vivo por simbolo
+- Columna ticker en formato `TICKER:NAME` (nombre truncado)
+- Columna tipo compacta (`CRT` para crypto, `STK` para stock)
+- Volumen compacto con sufijo `M` para valores grandes (ej. `150.00M`)
 - Ticker tipo zocalo (derecha a izquierda) con crypto + stocks
 - Panel de eventos
 - Panel de noticias multi-feed Finviz (v=3, v=4, v=5, v=6 y tabla News) con refresco cada 10 minutos
@@ -21,7 +24,11 @@ Aplicacion de terminal multiplataforma (Windows, Linux, macOS) con interfaz esti
   - Timeframes `15m`, `1h`, `1d`, `1w`, `1mo`
 - Carga dinamica de historicos por timeframe para llenar el viewport del chart
 - Scroll vertical en modal de chart para terminales chicas
-- Precarga historica inicial para acelerar primer render
+- Lazy loading por grupos visibles y carga de historicos en background
+- Precarga historica optimizada al arranque (grupo visible) y completado on-demand en charts
+- Cache local con TTL en `~/.cache/neon_quotes/` para historicos y nombres
+- Resolucion de nombres en background (UI no bloqueante)
+- Refresco de cotizaciones por ventana/grupo activo (no universo completo por ciclo)
 - Modal de arranque con animacion y progreso de carga de historicos
 - Reconexion automatica ante desconexiones
 - Atajos de teclado
@@ -131,7 +138,7 @@ NEON_STOCK_SYMBOLS="AAPL,MSFT,NVDA,AMZN" ./run_neon_quotes.sh
 
 ## Resolucion de Nombres de Simbolos
 
-Al iniciar, la app intenta resolver el nombre legible de cada ticker:
+Al iniciar, la app carga nombres desde cache local y luego resuelve en background el nombre legible de cada ticker:
 
 - `stock`: ejemplo `AAPL -> Apple Inc.`
 - `crypto`: ejemplo `BTCUSDT -> Bitcoin` (toma el activo base del par e ignora el quote)
@@ -145,6 +152,15 @@ Si una fuente externa no responde o no encuentra el nombre, la app usa fallback:
 
 - stocks: el propio ticker
 - crypto: el activo base del par
+
+## Cache Local
+
+Se usa cache local en:
+
+- `~/.cache/neon_quotes/history/` para historicos por simbolo
+- `~/.cache/neon_quotes/names.json` para nombres resueltos
+
+La app usa la cache para render inicial rapido y refresca en segundo plano.
 
 ## Atajos
 
