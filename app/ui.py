@@ -9,7 +9,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 from rich.text import Text
@@ -37,10 +37,17 @@ from .config import (
 from .feed import BinanceTickerFeed
 from .models import Quote
 from .news import NewsItem, fetch_all_news
-from .stocks import StockQuote, fetch_stock_history, fetch_stock_quotes
+from .stocks import (
+    StockQuote,
+    fetch_stock_candles_timeframe,
+    fetch_stock_history,
+    fetch_stock_quotes,
+)
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
+CANDLE_BUFFER_MAX = 1000
+TIMEFRAMES = ("15m", "1h", "1d", "1w", "1mo")
 
 try:
     import plotext as plt
@@ -110,11 +117,18 @@ class ChartModal(ModalScreen[None]):
     }
     """
 
-    def __init__(self, symbol: str, chart_builder: Callable[[str], Text]) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        chart_builder: Callable[[str, int], Text],
+        ensure_history: Callable[[str, int], Awaitable[None]],
+    ) -> None:
         super().__init__()
         self.symbol = symbol
         self.chart_builder = chart_builder
-        self.timeframe = "15m"
+        self.ensure_history = ensure_history
+        self.timeframe = TIMEFRAMES[0]
+        self._ensure_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chart_scroll"):
@@ -124,16 +138,43 @@ class ChartModal(ModalScreen[None]):
         self._refresh_chart()
         self.query_one("#chart_scroll", VerticalScroll).focus()
         self.set_interval(1.0, self._refresh_chart)
+        self._schedule_ensure_history()
+
+    async def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._schedule_ensure_history()
+
+    def _target_candle_count(self) -> int:
+        scroller = self.query_one("#chart_scroll", VerticalScroll)
+        # One glyph per candle, keeping a right/left safety margin.
+        return max(24, scroller.size.width - 10)
+
+    def _schedule_ensure_history(self) -> None:
+        if self._ensure_task and not self._ensure_task.done():
+            self._ensure_task.cancel()
+        self._ensure_task = asyncio.create_task(self._ensure_history_and_refresh())
+
+    async def _ensure_history_and_refresh(self) -> None:
+        try:
+            await self.ensure_history(self.timeframe, self._target_candle_count())
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # Don't break modal rendering when remote history refresh fails.
+            pass
+        self._refresh_chart()
 
     def _refresh_chart(self) -> None:
-        self.query_one("#chart_box", Static).update(self.chart_builder(self.timeframe))
+        target_candles = self._target_candle_count()
+        self.query_one("#chart_box", Static).update(self.chart_builder(self.timeframe, target_candles))
 
     def action_close_modal(self) -> None:
         self.dismiss(None)
 
     def action_toggle_timeframe(self) -> None:
-        self.timeframe = "1h" if self.timeframe == "15m" else "15m"
-        self._refresh_chart()
+        index = TIMEFRAMES.index(self.timeframe)
+        self.timeframe = TIMEFRAMES[(index + 1) % len(TIMEFRAMES)]
+        self._schedule_ensure_history()
 
     async def on_key(self, event: events.Key) -> None:
         scroller = self.query_one("#chart_scroll", VerticalScroll)
@@ -160,6 +201,12 @@ class ChartModal(ModalScreen[None]):
         if event.key == "end":
             scroller.scroll_end(animate=False)
             event.stop()
+
+    async def on_unmount(self) -> None:
+        if self._ensure_task and not self._ensure_task.done():
+            self._ensure_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ensure_task
 
 
 class BootModal(ModalScreen[None]):
@@ -298,10 +345,20 @@ class NeonQuotesApp(App[None]):
         self.stocks_last_update = "never"
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
-            symbol: deque(maxlen=96) for symbol in self.crypto_symbols
+            symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.crypto_symbols
         }
         self.stock_candles: dict[str, deque[Candle]] = {
-            symbol: deque(maxlen=96) for symbol in self.stock_symbols
+            symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.stock_symbols
+        }
+        self.crypto_candles_by_tf: dict[str, dict[str, deque[Candle]]] = {
+            tf: {symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.crypto_symbols}
+            for tf in TIMEFRAMES
+            if tf != "15m"
+        }
+        self.stock_candles_by_tf: dict[str, dict[str, deque[Candle]]] = {
+            tf: {symbol: deque(maxlen=CANDLE_BUFFER_MAX) for symbol in self.stock_symbols}
+            for tf in TIMEFRAMES
+            if tf != "15m"
         }
         self.boot_modal: BootModal | None = None
         self.startup_task: asyncio.Task[None] | None = None
@@ -563,7 +620,12 @@ class NeonQuotesApp(App[None]):
         self.push_screen(
             ChartModal(
                 symbol=symbol,
-                chart_builder=lambda tf: self._build_chart_text(self.symbol_data[symbol], tf),
+                chart_builder=lambda tf, candles: self._build_chart_text(
+                    self.symbol_data[symbol], tf, candles
+                ),
+                ensure_history=lambda tf, candles: self._ensure_crypto_chart_history(
+                    symbol, tf, candles
+                ),
             )
         )
 
@@ -573,7 +635,12 @@ class NeonQuotesApp(App[None]):
         self.push_screen(
             ChartModal(
                 symbol=symbol,
-                chart_builder=lambda tf: self._build_stock_chart_text(self.stock_data[symbol], tf),
+                chart_builder=lambda tf, candles: self._build_stock_chart_text(
+                    self.stock_data[symbol], tf, candles
+                ),
+                ensure_history=lambda tf, candles: self._ensure_stock_chart_history(
+                    symbol, tf, candles
+                ),
             )
         )
 
@@ -681,6 +748,76 @@ class NeonQuotesApp(App[None]):
             self._log(f"[#2ec4b6]STOCKS[/] refreshed {len(quotes)} symbols")
         except Exception as exc:
             self._log(f"[yellow]Stocks warning:[/] {exc!r}")
+
+    async def _ensure_crypto_chart_history(
+        self, symbol: str, timeframe: str, target_candles: int
+    ) -> None:
+        series = self._get_crypto_series(symbol, timeframe)
+        if series is None:
+            return
+        required = min(CANDLE_BUFFER_MAX, max(INITIAL_CANDLE_LIMIT, target_candles + 8))
+        if len(series) >= required:
+            return
+
+        candles_raw = await asyncio.to_thread(self.feed.fetch_recent_ohlc, symbol, timeframe, required)
+        if not candles_raw:
+            return
+        fresh = deque(maxlen=CANDLE_BUFFER_MAX)
+        for open_ts, open_p, high_p, low_p, close_p in candles_raw:
+            fresh.append(
+                Candle(
+                    bucket_ms=open_ts,
+                    open=open_p,
+                    high=high_p,
+                    low=low_p,
+                    close=close_p,
+                )
+            )
+        if timeframe == "15m":
+            self.candles[symbol] = fresh
+            return
+        self.crypto_candles_by_tf[timeframe][symbol] = fresh
+
+    async def _ensure_stock_chart_history(
+        self, symbol: str, timeframe: str, target_candles: int
+    ) -> None:
+        series = self._get_stock_series(symbol, timeframe)
+        if series is None:
+            return
+        required = min(CANDLE_BUFFER_MAX, max(INITIAL_CANDLE_LIMIT, target_candles + 8))
+        if len(series) >= required:
+            return
+
+        candles_raw = await asyncio.to_thread(fetch_stock_candles_timeframe, symbol, timeframe, required)
+        if not candles_raw:
+            return
+        fresh = deque(maxlen=CANDLE_BUFFER_MAX)
+        for open_ts, open_p, high_p, low_p, close_p in candles_raw:
+            fresh.append(
+                Candle(
+                    bucket_ms=open_ts,
+                    open=open_p,
+                    high=high_p,
+                    low=low_p,
+                    close=close_p,
+                )
+            )
+        if timeframe == "15m":
+            self.stock_candles[symbol] = fresh
+            return
+        self.stock_candles_by_tf[timeframe][symbol] = fresh
+
+    def _get_crypto_series(self, symbol: str, timeframe: str) -> deque[Candle] | None:
+        if timeframe == "15m":
+            return self.candles.get(symbol)
+        by_tf = self.crypto_candles_by_tf.get(timeframe, {})
+        return by_tf.get(symbol)
+
+    def _get_stock_series(self, symbol: str, timeframe: str) -> deque[Candle] | None:
+        if timeframe == "15m":
+            return self.stock_candles.get(symbol)
+        by_tf = self.stock_candles_by_tf.get(timeframe, {})
+        return by_tf.get(symbol)
 
     def _seed_symbol_history(
         self,
@@ -1042,7 +1179,12 @@ class NeonQuotesApp(App[None]):
         trend_color = "#00ffae" if sampled[-1] >= sampled[0] else "#ff5e7a"
         return Text("".join(points), style=trend_color)
 
-    def _build_chart_text(self, state: SymbolState, timeframe: str = "15m") -> Text:
+    def _build_chart_text(
+        self, state: SymbolState, timeframe: str = "15m", target_candles: int = 96
+    ) -> Text:
+        candles = list(self._get_crypto_series(state.symbol, timeframe) or deque())
+        if timeframe != "15m" and not candles:
+            candles = self._resample_candles(list(self.candles.get(state.symbol, deque())), timeframe)
         return self._build_chart_from_series(
             symbol=state.symbol,
             market_label="CRYPTO",
@@ -1050,11 +1192,17 @@ class NeonQuotesApp(App[None]):
             change_percent=state.change_percent,
             volume=state.volume,
             values=list(state.points or []),
-            candles=list(self.candles.get(state.symbol, deque())),
+            candles=candles,
             timeframe=timeframe,
+            target_candles=target_candles,
         )
 
-    def _build_stock_chart_text(self, state: StockState, timeframe: str = "15m") -> Text:
+    def _build_stock_chart_text(
+        self, state: StockState, timeframe: str = "15m", target_candles: int = 96
+    ) -> Text:
+        candles = list(self._get_stock_series(state.symbol, timeframe) or deque())
+        if timeframe != "15m" and not candles:
+            candles = self._resample_candles(list(self.stock_candles.get(state.symbol, deque())), timeframe)
         return self._build_chart_from_series(
             symbol=state.symbol,
             market_label="STOCK",
@@ -1062,8 +1210,9 @@ class NeonQuotesApp(App[None]):
             change_percent=state.change_percent,
             volume=state.volume,
             values=list(state.points or []),
-            candles=list(self.stock_candles.get(state.symbol, deque())),
+            candles=candles,
             timeframe=timeframe,
+            target_candles=target_candles,
         )
 
     def _build_chart_from_series(
@@ -1077,9 +1226,10 @@ class NeonQuotesApp(App[None]):
         values: list[float],
         candles: list[Candle],
         timeframe: str,
+        target_candles: int,
     ) -> Text:
         color = "#00ffae" if change_percent >= 0 else "#ff5e7a"
-        candles_for_tf = self._resample_candles(candles, timeframe)
+        visible_candles = max(24, target_candles)
 
         chart = Text()
         chart.append(f"{symbol} // {market_label} SNAPSHOT\n", style="bold #99e2ff")
@@ -1087,12 +1237,20 @@ class NeonQuotesApp(App[None]):
             f"price: {price:,.4f}   change: {change_percent:+.2f}%   volume: {volume:,.2f}\n",
             style=f"bold {color}",
         )
-        chart.append(f"timeframe: {timeframe.upper()}   toggle: [t]   close: [Esc]/[Enter]/[q]\n\n", style="#6f8aa8")
+        chart.append(
+            f"timeframe: {timeframe.upper()}   toggle: [t] 15m/1h/1d/1w/1mo   close: [Esc]/[Enter]/[q]\n\n",
+            style="#6f8aa8",
+        )
 
-        if len(candles_for_tf) >= 2:
+        if len(candles) >= 2:
             chart.append("Chart 1: Candlestick view\n", style="bold #2ec4b6")
-            chart.append(f"{timeframe.upper()} OHLC candles\n", style="#7fd7cb")
-            chart.append_text(self._render_candlestick_chart(candles_for_tf, width=96, height=16))
+            chart.append(
+                f"{timeframe.upper()} OHLC candles  |  showing latest {min(len(candles), visible_candles)}\n",
+                style="#7fd7cb",
+            )
+            chart.append_text(
+                self._render_candlestick_chart(candles, width=visible_candles, height=16)
+            )
             chart.append("\n")
 
         if len(values) >= 2:
@@ -1116,17 +1274,24 @@ class NeonQuotesApp(App[None]):
     def _resample_candles(self, candles: list[Candle], timeframe: str) -> list[Candle]:
         if timeframe == "15m":
             return candles
-        if timeframe != "1h":
-            return candles
         if not candles:
             return []
 
-        hour_ms = 60 * 60 * 1000
+        bucket_by_tf = {
+            "1h": 60 * 60 * 1000,
+            "1d": 24 * 60 * 60 * 1000,
+            "1w": 7 * 24 * 60 * 60 * 1000,
+            "1mo": 30 * 24 * 60 * 60 * 1000,
+        }
+        bucket_ms = bucket_by_tf.get(timeframe)
+        if bucket_ms is None:
+            return candles
+
         out: list[Candle] = []
         current: Candle | None = None
 
         for candle in candles:
-            bucket = (candle.bucket_ms // hour_ms) * hour_ms
+            bucket = (candle.bucket_ms // bucket_ms) * bucket_ms
             if current is None or current.bucket_ms != bucket:
                 if current is not None:
                     out.append(current)
@@ -1255,8 +1420,7 @@ class NeonQuotesApp(App[None]):
 
     def _render_candlestick_chart(self, candles: list[Candle], width: int, height: int) -> Text:
         if len(candles) > width:
-            step = len(candles) / width
-            sampled = [candles[int(i * step)] for i in range(width)]
+            sampled = candles[-width:]
         else:
             sampled = candles
 
@@ -1298,9 +1462,13 @@ class NeonQuotesApp(App[None]):
         for symbol in self.crypto_symbols:
             self.symbol_data[symbol] = SymbolState(symbol=symbol)
             self._refresh_row(self.symbol_data[symbol])
+            for tf in self.crypto_candles_by_tf:
+                self.crypto_candles_by_tf[tf][symbol].clear()
         for symbol in self.stock_symbols:
             self.stock_data[symbol] = StockState(symbol=symbol)
             self.stock_candles[symbol].clear()
+            for tf in self.stock_candles_by_tf:
+                self.stock_candles_by_tf[tf][symbol].clear()
             self._refresh_stock_row(self.stock_data[symbol])
         self._log("[cyan]Local buffers reset[/]")
 

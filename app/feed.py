@@ -68,7 +68,26 @@ class BinanceTickerFeed:
     def fetch_recent_15m_ohlc(
         self, symbol: str, limit: int = 96
     ) -> list[tuple[int, float, float, float, float]]:
-        url = self._rest_url("klines", symbol=symbol.upper(), interval="15m", limit=limit)
+        return self.fetch_recent_ohlc(symbol, "15m", limit)
+
+    def fetch_recent_ohlc(
+        self, symbol: str, interval: str = "15m", limit: int = 96
+    ) -> list[tuple[int, float, float, float, float]]:
+        interval_map = {
+            "15m": "15m",
+            "1h": "1h",
+            "1d": "1d",
+            "1w": "1w",
+            "1mo": "1M",
+        }
+        binance_interval = interval_map.get(interval, "15m")
+        safe_limit = max(2, min(1000, int(limit)))
+        url = self._rest_url(
+            "klines",
+            symbol=symbol.upper(),
+            interval=binance_interval,
+            limit=safe_limit,
+        )
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urlopen(req, timeout=20) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
