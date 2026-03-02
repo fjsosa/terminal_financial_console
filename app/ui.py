@@ -181,6 +181,15 @@ from .startup_mount import (
     refresh_theme_panels,
     schedule_mount_intervals,
 )
+from .group_rotation_controller import (
+    cycle_indicator_group,
+    cycle_main_group,
+    cycle_news_group,
+    pause_group_rotation,
+    rotate_indicator_group,
+    rotate_main_group,
+    rotate_news_group,
+)
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
@@ -734,75 +743,25 @@ class NeonQuotesApp(App[None]):
         )
 
     def _rotate_news_group(self) -> None:
-        if not self.news_groups:
-            return
-        if self.rotation.is_paused("news_table"):
-            return
-        self.news_group_index = self.rotation.cycle_index(self.news_group_index, len(self.news_groups))
-        self._update_news_panel()
+        rotate_news_group(self)
 
     def _rotate_main_group(self) -> None:
-        if self.is_shutting_down:
-            return
-        if not self.main_group_items:
-            return
-        if self.rotation.is_paused("crypto_quotes"):
-            return
-        self.main_group_index = self.rotation.cycle_index(self.main_group_index, len(self.main_group_items))
-        self._update_main_group_panel()
-        self._schedule_stock_refresh()
-        self._spawn_background(self._refresh_crypto_stream_for_visible_group())
-        if self.lazy_history_task and not self.lazy_history_task.done():
-            self.lazy_history_task.cancel()
-        self.lazy_history_task = self._spawn_background(self._load_remaining_history_in_background())
+        rotate_main_group(self)
 
     def _rotate_indicator_group(self) -> None:
-        if self.is_shutting_down:
-            return
-        if not self.indicator_group_items:
-            return
-        if self.rotation.is_paused("indicators_table"):
-            return
-        self.indicator_group_index = self.rotation.cycle_index(
-            self.indicator_group_index, len(self.indicator_group_items)
-        )
-        self._update_indicators_panel()
-        self._schedule_indicator_refresh()
+        rotate_indicator_group(self)
 
     def _pause_group_rotation(self, table_id: str, seconds: int = 60) -> None:
-        self.rotation.pause(table_id, seconds)
+        pause_group_rotation(self, table_id, seconds)
 
     def _cycle_main_group(self, step: int) -> None:
-        if self.is_shutting_down:
-            return
-        if not self.main_group_items:
-            return
-        self.main_group_index = self.rotation.cycle_index(
-            self.main_group_index, len(self.main_group_items), step
-        )
-        self._pause_group_rotation("crypto_quotes", 60)
-        self._update_main_group_panel()
-        self._schedule_stock_refresh()
-        self._spawn_background(self._refresh_crypto_stream_for_visible_group())
+        cycle_main_group(self, step)
 
     def _cycle_news_group(self, step: int) -> None:
-        if not self.news_groups:
-            return
-        self.news_group_index = self.rotation.cycle_index(self.news_group_index, len(self.news_groups), step)
-        self._pause_group_rotation("news_table", 60)
-        self._update_news_panel()
+        cycle_news_group(self, step)
 
     def _cycle_indicator_group(self, step: int) -> None:
-        if not self.indicator_group_items:
-            return
-        self.indicator_group_index = self.rotation.cycle_index(
-            self.indicator_group_index,
-            len(self.indicator_group_items),
-            step,
-        )
-        self._pause_group_rotation("indicators_table", 60)
-        self._update_indicators_panel()
-        self._schedule_indicator_refresh()
+        cycle_indicator_group(self, step)
 
     async def _refresh_crypto_stream_for_visible_group(self) -> None:
         await refresh_crypto_stream_for_visible_group(self)
