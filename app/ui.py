@@ -190,11 +190,26 @@ from .group_rotation_controller import (
     rotate_main_group,
     rotate_news_group,
 )
+from .constants import (
+    AGE_NOW,
+    ID_ALERTS_TABLE,
+    ID_EVENTS,
+    ID_HEADER,
+    ID_INDICATORS_TABLE,
+    ID_MAIN_TABLE,
+    ID_NEWS_TABLE,
+    ID_STATUS_LINE,
+    ID_TICKER,
+    STATUS_CONNECTING,
+    SYMBOL_TYPE_CRYPTO,
+    SYMBOL_TYPE_STOCK,
+    TIMEFRAMES,
+    VALUE_NEVER,
+)
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
 CANDLE_BUFFER_MAX = 1000
-TIMEFRAMES = ("15m", "1h", "1d", "1w", "1mo")
 ALERTS_TABLE_SIZE = 15
 STOCK_TREND_UP_COLOR = "#00ffae"
 STOCK_TREND_DOWN_COLOR = "#ff5e7a"
@@ -224,7 +239,7 @@ class NeonQuotesApp(App[None]):
     ]
 
     heartbeat = reactive(False)
-    status_text = reactive("CONNECTING")
+    status_text = reactive(STATUS_CONNECTING)
     ticker_offset = reactive(0)
 
     def __init__(
@@ -314,7 +329,7 @@ class NeonQuotesApp(App[None]):
         self.alerts_row_item_by_index: dict[int, tuple[str, str]] = {}
         self.news_row_keys: list[Any] = []
         self.news_col_keys: dict[str, Any] = {}
-        self.news_last_update = "never"
+        self.news_last_update = VALUE_NEVER
         self.news_groups: list[tuple[str, list[NewsItem]]] = []
         self.news_latest_items: list[NewsItem] = []
         self.news_group_index = 0
@@ -328,9 +343,9 @@ class NeonQuotesApp(App[None]):
         self.ticker_mode = self.ticker_modes[0][0]
         self.ticker_mode_ticks_remaining = self.ticker_modes[0][1]
         self.rotation = RotationController()
-        self.stocks_last_update = "never"
-        self.indicators_last_update = "never"
-        self.calendar_last_update = "never"
+        self.stocks_last_update = VALUE_NEVER
+        self.indicators_last_update = VALUE_NEVER
+        self.calendar_last_update = VALUE_NEVER
         self.calendar_events: list[CalendarEvent] = []
         self.local_tz = self._resolve_timezone()
         self.candles: dict[str, deque[Candle]] = {
@@ -367,7 +382,7 @@ class NeonQuotesApp(App[None]):
         )
         self.status_hint = (
             f":|f2 {tr('Cmd')} | q {tr('quit')} | [enter] {tr('chart')} | "
-            f"? {tr('help')} | ⌃P palette"
+            f"? {tr('help')} | ⌃P {tr('palette')}"
         )
 
     def compose(self) -> ComposeResult:
@@ -427,7 +442,7 @@ class NeonQuotesApp(App[None]):
         }
 
     def _trend_color(self, is_up: bool, symbol_type: str | None = None) -> str:
-        if symbol_type == "stock":
+        if symbol_type == SYMBOL_TYPE_STOCK:
             return STOCK_TREND_UP_COLOR if is_up else STOCK_TREND_DOWN_COLOR
         palette = self._ui_palette()
         return palette["ok"] if is_up else palette["err"]
@@ -484,7 +499,7 @@ class NeonQuotesApp(App[None]):
             age_ms=age_ms,
             heartbeat=self.heartbeat,
         )
-        self.query_one("#header", Static).update(header)
+        self.query_one(ID_HEADER, Static).update(header)
         self._render_status_line()
 
     def _rotate_ticker_mode(self) -> None:
@@ -524,7 +539,7 @@ class NeonQuotesApp(App[None]):
         value = (age or "").strip().lower()
         if not value:
             return 999999
-        if value == "now":
+        if value == AGE_NOW:
             return 0
         match = AGE_TOKEN_RE.match(value)
         if match:
@@ -582,7 +597,7 @@ class NeonQuotesApp(App[None]):
             )
 
         if not chunks:
-            self.query_one("#ticker", Static).update(tr("Waiting for market data..."))
+            self.query_one(ID_TICKER, Static).update(tr("Waiting for market data..."))
             return
 
         separator = " | " if mode == "calendar" else "   |   "
@@ -600,7 +615,7 @@ class NeonQuotesApp(App[None]):
             palette=palette,
             heartbeat=self.heartbeat,
         )
-        self.query_one("#ticker", Static).update(ticker_text)
+        self.query_one(ID_TICKER, Static).update(ticker_text)
         self.ticker_offset += 1
 
     async def _consume_feed(self) -> None:
@@ -649,10 +664,10 @@ class NeonQuotesApp(App[None]):
         if isinstance(self.screen, ChartModal):
             self.screen.dismiss(None)
             return
-        news_table = self.query_one("#news_table", DataTable)
-        indicators_table = self.query_one("#indicators_table", DataTable)
-        alerts_table = self.query_one("#stock_quotes", DataTable)
-        main_table = self.query_one("#crypto_quotes", DataTable)
+        news_table = self.query_one(ID_NEWS_TABLE, DataTable)
+        indicators_table = self.query_one(ID_INDICATORS_TABLE, DataTable)
+        alerts_table = self.query_one(ID_ALERTS_TABLE, DataTable)
+        main_table = self.query_one(ID_MAIN_TABLE, DataTable)
         if news_table.has_focus:
             row = news_table.cursor_row
             if row is not None:
@@ -683,7 +698,7 @@ class NeonQuotesApp(App[None]):
     def _build_chart_for_item(
         self, symbol: str, symbol_type: str, timeframe: str, target_candles: int
     ) -> Text:
-        if symbol_type == "stock":
+        if symbol_type == SYMBOL_TYPE_STOCK:
             state = self.stock_data.get(symbol)
             if state is None:
                 state = StockState(symbol=symbol)
@@ -698,7 +713,7 @@ class NeonQuotesApp(App[None]):
     async def _ensure_chart_history_for_item(
         self, symbol: str, symbol_type: str, timeframe: str, target_candles: int
     ) -> None:
-        if symbol_type == "stock":
+        if symbol_type == SYMBOL_TYPE_STOCK:
             await self._ensure_stock_chart_history(symbol, timeframe, target_candles)
             return
         await self._ensure_crypto_chart_history(symbol, timeframe, target_candles)
@@ -776,7 +791,7 @@ class NeonQuotesApp(App[None]):
         update_alerts_panel(self, ALERTS_TABLE_SIZE)
 
     def _get_change_percent(self, symbol: str, symbol_type: str) -> float:
-        if symbol_type == "crypto":
+        if symbol_type == SYMBOL_TYPE_CRYPTO:
             state = self.symbol_data.get(symbol)
             return state.change_percent if state is not None else -9999.0
         state = self.stock_data.get(symbol)
@@ -885,7 +900,7 @@ class NeonQuotesApp(App[None]):
             candle_cls=Candle,
         )
 
-        self._refresh_main_row(symbol, "crypto")
+        self._refresh_main_row(symbol, SYMBOL_TYPE_CRYPTO)
 
     def _seed_stock_history(
         self,
@@ -901,7 +916,7 @@ class NeonQuotesApp(App[None]):
             max_points=MAX_POINTS,
             candle_cls=Candle,
         )
-        self._refresh_main_row(symbol, "stock")
+        self._refresh_main_row(symbol, SYMBOL_TYPE_STOCK)
 
     def _resolve_timezone(self) -> ZoneInfo | None:
         if self.timezone:
@@ -977,7 +992,7 @@ class NeonQuotesApp(App[None]):
 
     def _render_status_line(self) -> None:
         palette = self._ui_palette()
-        line = self.query_one("#status_line", Static)
+        line = self.query_one(ID_STATUS_LINE, Static)
         line.update(
             build_status_line_text(
                 palette=palette,
@@ -1112,10 +1127,10 @@ class NeonQuotesApp(App[None]):
         )
 
     def _refresh_row(self, state: SymbolState) -> None:
-        self._refresh_main_row(state.symbol, "crypto")
+        self._refresh_main_row(state.symbol, SYMBOL_TYPE_CRYPTO)
 
     def _refresh_stock_row(self, state: StockState) -> None:
-        self._refresh_main_row(state.symbol, "stock")
+        self._refresh_main_row(state.symbol, SYMBOL_TYPE_STOCK)
 
     def _new_stock_state(self, symbol: str) -> StockState:
         return StockState(symbol=symbol)
@@ -1181,7 +1196,7 @@ class NeonQuotesApp(App[None]):
         return resample_candles(candles, timeframe)
 
     def _log(self, message: str) -> None:
-        self.query_one("#events", RichLog).write(message)
+        self.query_one(ID_EVENTS, RichLog).write(message)
         ts = datetime.now(self.local_tz).strftime("%Y-%m-%d %H:%M:%S")
         try:
             append_app_log_line(f"{ts} {message}")

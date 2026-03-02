@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from rich.text import Text
 
+from .constants import AGE_NOW
+
 
 class NewsPalette(dict[str, str]):
     pass
@@ -43,7 +45,7 @@ def format_news_headline(
     clean_source = (source.strip() or "source")[:20]
     clean_age = (age.strip() or "-")[:12]
     age_lower = clean_age.lower()
-    show_fire = age_lower == "now"
+    show_fire = age_lower == AGE_NOW
     words = (title or "").split() or ["-"]
     per_line = max(12, line_len)
 
@@ -66,7 +68,7 @@ def format_news_headline(
         body_lines[1] = (body_lines[1][: max(0, per_line - 1)] + "…").rstrip()
 
     age_style = news_palette["age_old"]
-    if "now" in age_lower:
+    if AGE_NOW in age_lower:
         age_style = news_palette["age_now"]
     elif "min" in age_lower or "hour" in age_lower:
         age_style = news_palette["age_recent"]
@@ -90,7 +92,7 @@ def format_news_headline(
 def headline_inline(source: str, age: str, title: str, max_title_len: int) -> str:
     clean_source = (source or "source").strip()[:16]
     clean_age = (age or "-").strip()[:10]
-    if clean_age.lower() == "now":
+    if clean_age.lower() == AGE_NOW:
         clean_age = f"{clean_age} 🔥"
     clean_title = " ".join((title or "").split())
     if len(clean_title) > max_title_len:

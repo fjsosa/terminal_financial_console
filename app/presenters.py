@@ -40,14 +40,14 @@ def build_status_line_text(
         left = (
             f":{command_buffer}█ | [Enter] {tr('run')} | [Esc] {tr('normal')} | "
             f"q {tr('quit')} | r {tr('reset')} | n {tr('news')} | ? {tr('help')} | "
-            "c calendar | add/del/mv/edit"
+            f"c {tr('calendar')} | add/del/mv/edit"
         )
         right = tr("status: enter command")
         right_style = palette["warn"]
     else:
         left = (
             f":|f2 {tr('Cmd')} | q {tr('quit')} | [enter] {tr('chart')} | "
-            f"? {tr('help')} | ⌃P palette | < {tr('previous group')} | > {tr('next group')}"
+            f"? {tr('help')} | ⌃P {tr('palette')} | < {tr('previous group')} | > {tr('next group')}"
         )
         right = tr("status: normal")
         right_style = palette["ok"]

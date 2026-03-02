@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from rich.text import Text
 
+from .constants import ID_MAIN_TABLE, SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK
 from .grouping import build_main_groups
 from .market_runtime import apply_quote_to_state, update_candles
 from .models import Quote
@@ -44,7 +45,7 @@ class MarketPanelHost(Protocol):
 
 
 def ensure_main_row_capacity(host: MarketPanelHost, required_rows: int) -> None:
-    table = host.query_one("#crypto_quotes", object)
+    table = host.query_one(ID_MAIN_TABLE, object)
     while len(host.main_row_keys) < required_rows:
         idx = len(host.main_row_keys)
         row_key = table.add_row("-", "-", "-", "-", "-", "", key=f"main_{idx}")
@@ -120,7 +121,7 @@ def apply_stock_quote(
 
 
 def refresh_main_row(host: MarketPanelHost, symbol: str, symbol_type: str) -> None:
-    table = host.query_one("#crypto_quotes", object)
+    table = host.query_one(ID_MAIN_TABLE, object)
     row_index = None
     for idx, item in host.main_row_item_by_index.items():
         if item == (symbol, symbol_type):
@@ -130,11 +131,11 @@ def refresh_main_row(host: MarketPanelHost, symbol: str, symbol_type: str) -> No
         return
     row_key = host.main_row_keys[row_index]
 
-    if symbol_type == "crypto":
+    if symbol_type == SYMBOL_TYPE_CRYPTO:
         state = host.symbol_data.get(symbol)
         if state is None:
             return
-        color = host._trend_color(state.change_percent >= 0, symbol_type="crypto")
+        color = host._trend_color(state.change_percent >= 0, symbol_type=SYMBOL_TYPE_CRYPTO)
         price = Text(f"{state.price:>13,.2f}", style=color)
         change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
         volume = host._format_volume(state.volume, 17)
@@ -145,7 +146,7 @@ def refresh_main_row(host: MarketPanelHost, symbol: str, symbol_type: str) -> No
         if state is None:
             state = host._new_stock_state(symbol)
             host.stock_data[symbol] = state
-        color = host._trend_color(state.change_percent >= 0, symbol_type="stock")
+        color = host._trend_color(state.change_percent >= 0, symbol_type=SYMBOL_TYPE_STOCK)
         price = Text(f"{state.price:>13,.2f}", style=color)
         change = Text(f"{state.change_percent:>+8.2f}%", style=f"bold {color}")
         volume = host._format_volume(state.volume, 17)

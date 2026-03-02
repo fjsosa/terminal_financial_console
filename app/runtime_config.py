@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Callable
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK, SYMBOL_TYPES
+
 
 def normalize_symbol_type(symbol: str, symbol_type: str) -> str:
     st = (symbol_type or "").strip().lower()
-    if st in {"crypto", "stock"}:
+    if st in SYMBOL_TYPES:
         return st
-    return "crypto" if symbol.upper().endswith("USDT") else "stock"
+    return SYMBOL_TYPE_CRYPTO if symbol.upper().endswith("USDT") else SYMBOL_TYPE_STOCK
 
 
 def find_group_index(market_groups: list[dict[str, Any]], group_name: str) -> int | None:
@@ -69,7 +71,7 @@ def sync_market_data_structures(
     seen_stock: set[str] = set()
     for _, items in main_group_items:
         for symbol, symbol_type in items:
-            if symbol_type == "crypto":
+            if symbol_type == SYMBOL_TYPE_CRYPTO:
                 if symbol not in seen_crypto:
                     seen_crypto.add(symbol)
                     crypto_symbols.append(symbol)

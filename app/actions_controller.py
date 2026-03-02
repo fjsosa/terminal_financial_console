@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK
 from .i18n import tr
 
 
@@ -42,7 +43,7 @@ def open_calendar_modal(host: ActionsHost, calendar_modal_cls: type[Any]) -> Non
 
 
 def refresh_news_action(host: ActionsHost) -> None:
-    host._log("[#2ec4b6]NEWS[/] manual refresh requested")
+    host._log(f"[#2ec4b6]NEWS[/] {tr('manual refresh requested')}")
     host._schedule_news_refresh()
 
 
@@ -75,7 +76,7 @@ def reset_local_buffers(
 ) -> None:
     for symbol in host.crypto_symbols:
         host.symbol_data[symbol] = symbol_state_factory(symbol=symbol)
-        host._refresh_main_row(symbol, "crypto")
+        host._refresh_main_row(symbol, SYMBOL_TYPE_CRYPTO)
         for tf in host.crypto_candles_by_tf:
             host.crypto_candles_by_tf[tf][symbol].clear()
     for symbol in host.stock_symbols:
@@ -83,10 +84,10 @@ def reset_local_buffers(
         host.stock_candles[symbol].clear()
         for tf in host.stock_candles_by_tf:
             host.stock_candles_by_tf[tf][symbol].clear()
-        host._refresh_main_row(symbol, "stock")
+        host._refresh_main_row(symbol, SYMBOL_TYPE_STOCK)
     for symbol in host.indicator_symbols:
         host.indicator_data[symbol] = stock_state_factory(symbol=symbol)
     host._update_main_group_panel()
     host._update_indicators_panel()
     host._update_alerts_panel()
-    host._log("[cyan]Local buffers reset[/]")
+    host._log(f"[cyan]{tr('Local buffers reset')}[/]")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
+from .constants import SYMBOL_TYPE_STOCK
 from .i18n import tr
 from .models import StockState
 from .refresh_services import refresh_calendar_data, refresh_news_data, refresh_stock_quotes
@@ -130,7 +131,7 @@ async def refresh_news(
 async def refresh_stocks(host: RefreshHost) -> None:
     if not host.stock_symbols:
         return
-    visible_stock_symbols = [s for s, t in host.main_visible_items if t == "stock"]
+    visible_stock_symbols = [s for s, t in host.main_visible_items if t == SYMBOL_TYPE_STOCK]
     symbols_to_refresh = visible_stock_symbols or host.stock_symbols
     if not symbols_to_refresh:
         return

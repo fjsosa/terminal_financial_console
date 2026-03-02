@@ -4,6 +4,13 @@ import asyncio
 import contextlib
 from typing import Any, Callable, Protocol
 
+from .constants import (
+    STATUS_RECONNECTING,
+    STATUS_STOCKS_ONLY,
+    STATUS_STREAMING,
+    SYMBOL_TYPE_CRYPTO,
+)
+
 
 class StreamHost(Protocol):
     main_visible_items: list[tuple[str, str]]
@@ -20,7 +27,7 @@ async def refresh_crypto_stream_for_visible_group(
     *,
     create_task_fn: Callable[[Any], asyncio.Task[Any]] = asyncio.create_task,
 ) -> None:
-    desired = [s for s, t in host.main_visible_items if t == "crypto"]
+    desired = [s for s, t in host.main_visible_items if t == SYMBOL_TYPE_CRYPTO]
     desired = [s.upper() for s in desired if s]
     current = [s.upper() for s in host.quote_provider.symbols]
     if desired == current and host.feed_task is not None:
@@ -33,7 +40,7 @@ async def refresh_crypto_stream_for_visible_group(
         host.feed_task = None
 
     if not desired:
-        host.status_text = "STOCKS ONLY"
+        host.status_text = STATUS_STOCKS_ONLY
         return
 
     host.quote_provider.set_symbols(desired)
@@ -41,7 +48,7 @@ async def refresh_crypto_stream_for_visible_group(
 
 
 async def consume_feed(host: StreamHost, *, reconnect_sleep_seconds: float = 2.0, max_cycles: int | None = None) -> None:
-    host.status_text = "STREAMING"
+    host.status_text = STATUS_STREAMING
     host._log("[green]Connected to Binance stream[/]")
     cycles = 0
     while True:
@@ -54,10 +61,10 @@ async def consume_feed(host: StreamHost, *, reconnect_sleep_seconds: float = 2.0
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            host.status_text = "RECONNECTING"
+            host.status_text = STATUS_RECONNECTING
             host._log(f"[yellow]Stream warning:[/] {exc!r}")
             await asyncio.sleep(reconnect_sleep_seconds)
-            host.status_text = "STREAMING"
+            host.status_text = STATUS_STREAMING
             cycles += 1
             if max_cycles is not None and cycles >= max_cycles:
                 return

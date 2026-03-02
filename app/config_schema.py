@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import DEFAULT_CRYPTO_SYMBOLS, DEFAULT_LANGUAGE, DEFAULT_STOCK_SYMBOLS
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK, SYMBOL_TYPES
 
 DEFAULT_QUICK_ACTIONS = {
     "1": "BTCUSDT",
@@ -21,9 +22,9 @@ class SymbolConfig:
     @staticmethod
     def _infer_type(symbol: str, symbol_type: str) -> str:
         st = (symbol_type or "").strip().lower()
-        if st in {"crypto", "stock"}:
+        if st in SYMBOL_TYPES:
             return st
-        return "crypto" if symbol.upper().endswith("USDT") else "stock"
+        return SYMBOL_TYPE_CRYPTO if symbol.upper().endswith("USDT") else SYMBOL_TYPE_STOCK
 
     @classmethod
     def from_raw(cls, item: object) -> SymbolConfig | None:
@@ -212,14 +213,14 @@ class AppConfig:
                 groups.append(
                     GroupConfig(
                         name="CRYPTO",
-                        symbols=[SymbolConfig(symbol=symbol, type="crypto") for symbol in legacy_crypto],
+                        symbols=[SymbolConfig(symbol=symbol, type=SYMBOL_TYPE_CRYPTO) for symbol in legacy_crypto],
                     )
                 )
             if legacy_stock:
                 groups.append(
                     GroupConfig(
                         name="STOCKS",
-                        symbols=[SymbolConfig(symbol=symbol, type="stock") for symbol in legacy_stock],
+                        symbols=[SymbolConfig(symbol=symbol, type=SYMBOL_TYPE_STOCK) for symbol in legacy_stock],
                     )
                 )
 

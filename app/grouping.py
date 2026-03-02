@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK, SYMBOL_TYPES
+
 
 GroupItems = list[tuple[str, str]]
 GroupList = list[tuple[str, GroupItems]]
@@ -28,8 +30,8 @@ def build_symbol_groups(
                 continue
             symbol = str(item.get("symbol") or "").strip().upper()
             symbol_type = str(item.get("type") or "").strip().lower()
-            if symbol_type not in {"crypto", "stock"}:
-                symbol_type = "crypto" if symbol.endswith("USDT") else "stock"
+            if symbol_type not in SYMBOL_TYPES:
+                symbol_type = SYMBOL_TYPE_CRYPTO if symbol.endswith("USDT") else SYMBOL_TYPE_STOCK
             if not symbol:
                 continue
             key = (symbol, symbol_type)
@@ -56,9 +58,9 @@ def build_main_groups(
 ) -> GroupList:
     fallback_symbols: GroupItems = []
     for symbol in crypto_symbols:
-        fallback_symbols.append((symbol, "crypto"))
+        fallback_symbols.append((symbol, SYMBOL_TYPE_CRYPTO))
     for symbol in stock_symbols:
-        fallback_symbols.append((symbol, "stock"))
+        fallback_symbols.append((symbol, SYMBOL_TYPE_STOCK))
     return build_symbol_groups(
         market_groups,
         fallback_name="MAIN",

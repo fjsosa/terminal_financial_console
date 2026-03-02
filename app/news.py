@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .constants import AGE_NOW
 from .config import (
     FINVIZ_CRYPTO_NEWS_URL,
     FINVIZ_ECONOMY_NEWS_URL,
@@ -78,7 +79,7 @@ class _FinvizNewsParser(HTMLParser):
 
         title = unescape(" ".join(self._anchor_text_parts)).strip()
         href = self._href.strip()
-        age = self._pending_age or "now"
+        age = self._pending_age or AGE_NOW
 
         self._in_anchor = False
         self._href = ""
@@ -136,4 +137,3 @@ def fetch_all_news(limit_per_source: int = 15) -> dict[str, list[NewsItem]]:
         except Exception:
             out[source.label] = []
     return out
-

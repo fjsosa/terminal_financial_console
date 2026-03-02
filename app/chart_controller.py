@@ -3,6 +3,13 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Callable, Protocol
 
+from .constants import (
+    ID_ALERTS_TABLE,
+    ID_MAIN_TABLE,
+    ID_NEWS_TABLE,
+    ROTATE_MAIN,
+    SYMBOL_TYPE_STOCK,
+)
 from .grouping import advance_symbol_across_groups
 
 
@@ -64,12 +71,12 @@ def open_chart_for_symbol(
         for i, (_, items) in enumerate(host.main_group_items):
             if nxt in items:
                 host.main_group_index = i
-                host._pause_group_rotation("crypto_quotes", 60)
+                host._pause_group_rotation(ROTATE_MAIN, 60)
                 host._update_main_group_panel()
                 break
         return nxt
 
-    if symbol_type == "stock":
+    if symbol_type == SYMBOL_TYPE_STOCK:
         if symbol not in host.stock_data:
             host.stock_data[symbol] = stock_state_factory(symbol)
             host.stock_candles[symbol] = deque(maxlen=candle_buffer_max)
@@ -125,11 +132,11 @@ def handle_row_selected(
     cursor_row: int,
     **kwargs: Any,
 ) -> None:
-    if table_id == "crypto_quotes":
+    if table_id == ID_MAIN_TABLE.lstrip("#"):
         open_main_chart_for_row(host, cursor_row, **kwargs)
         return
-    if table_id == "stock_quotes":
+    if table_id == ID_ALERTS_TABLE.lstrip("#"):
         open_alert_chart_for_row(host, cursor_row, **kwargs)
         return
-    if table_id == "news_table":
+    if table_id == ID_NEWS_TABLE.lstrip("#"):
         host._copy_news_link(cursor_row)

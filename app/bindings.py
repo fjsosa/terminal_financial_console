@@ -5,6 +5,15 @@ from typing import Any, Protocol
 from textual import events
 from textual.widgets import DataTable, Input
 
+from .constants import (
+    ID_COMMAND_INPUT,
+    ID_INDICATORS_TABLE,
+    ID_MAIN_TABLE,
+    ID_NEWS_TABLE,
+    ROTATE_INDICATORS,
+    ROTATE_MAIN,
+    ROTATE_NEWS,
+)
 from .screens import CalendarModal, ChartModal, ReadmeModal
 
 
@@ -50,13 +59,13 @@ def handle_modal_shortcuts(host: BindingsHost, event: events.Key) -> bool:
 
 
 def handle_table_navigation(host: BindingsHost, event: events.Key) -> bool:
-    main_table = host.query_one("#crypto_quotes", DataTable)
-    indicators_table = host.query_one("#indicators_table", DataTable)
-    news_table = host.query_one("#news_table", DataTable)
+    main_table = host.query_one(ID_MAIN_TABLE, DataTable)
+    indicators_table = host.query_one(ID_INDICATORS_TABLE, DataTable)
+    news_table = host.query_one(ID_NEWS_TABLE, DataTable)
 
     if main_table.has_focus:
         if event.key in NAV_KEYS:
-            host._pause_group_rotation("crypto_quotes", 60)
+            host._pause_group_rotation(ROTATE_MAIN, 60)
         if event.key in LEFT_KEYS or event.character in {"<", ","}:
             host._cycle_main_group(-1)
             event.stop()
@@ -68,7 +77,7 @@ def handle_table_navigation(host: BindingsHost, event: events.Key) -> bool:
 
     if news_table.has_focus:
         if event.key in NAV_KEYS:
-            host._pause_group_rotation("news_table", 60)
+            host._pause_group_rotation(ROTATE_NEWS, 60)
         if event.key in LEFT_KEYS or event.character in {"<", ","}:
             host._cycle_news_group(-1)
             event.stop()
@@ -80,7 +89,7 @@ def handle_table_navigation(host: BindingsHost, event: events.Key) -> bool:
 
     if indicators_table.has_focus:
         if event.key in NAV_KEYS:
-            host._pause_group_rotation("indicators_table", 60)
+            host._pause_group_rotation(ROTATE_INDICATORS, 60)
         if event.key in LEFT_KEYS or event.character in {"<", ","}:
             host._cycle_indicator_group(-1)
             event.stop()
@@ -103,7 +112,7 @@ def handle_command_mode_keys(host: BindingsHost, event: events.Key) -> bool:
         return True
 
     if event.key == "enter":
-        command_input = host.query_one("#command_input", Input)
+        command_input = host.query_one(ID_COMMAND_INPUT, Input)
         raw = (command_input.value or "").strip()
         if raw.startswith(":"):
             raw = raw[1:].strip()

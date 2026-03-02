@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from rich.text import Text
 
 from .calendar import CalendarEvent
+from .constants import SYMBOL_TYPE_CRYPTO
 from .formatters import headline_inline
 from .i18n import tr
 from .news import NewsItem
@@ -142,12 +143,12 @@ def ticker_chunks_quotes(
 ) -> list[str]:
     chunks: list[str] = []
     for symbol, symbol_type in alerts_items:
-        state = symbol_data.get(symbol) if symbol_type == "crypto" else stock_data.get(symbol)
+        state = symbol_data.get(symbol) if symbol_type == SYMBOL_TYPE_CRYPTO else stock_data.get(symbol)
         if state is None or getattr(state, "price", 0.0) <= 0:
             continue
         change = float(getattr(state, "change_percent", 0.0))
         arrow = "▲" if change >= 0 else "▼"
-        prefix = "C" if symbol_type == "crypto" else "S"
+        prefix = "C" if symbol_type == SYMBOL_TYPE_CRYPTO else "S"
         price = float(getattr(state, "price", 0.0))
         chunks.append(f"{prefix}:{symbol} {arrow} {price:,.2f} ({change:+.2f}%)")
     return chunks

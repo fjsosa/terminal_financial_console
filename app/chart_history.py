@@ -5,12 +5,13 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK, TIMEFRAME_15M
 from .cache import save_symbol_history_cache
 
 
 class QuoteProviderLike(Protocol):
     def fetch_recent_ohlc(
-        self, symbol: str, interval: str = "15m", limit: int = 96
+        self, symbol: str, interval: str = TIMEFRAME_15M, limit: int = 96
     ) -> list[tuple[int, float, float, float, float]]: ...
 
     def fetch_recent_closes(self, symbol: str, limit: int = 240) -> list[tuple[int, float]]: ...
@@ -18,7 +19,7 @@ class QuoteProviderLike(Protocol):
 
 class StockProviderLike(Protocol):
     def fetch_candles_timeframe(
-        self, symbol: str, timeframe: str = "15m", candle_limit: int = 96
+        self, symbol: str, timeframe: str = TIMEFRAME_15M, candle_limit: int = 96
     ) -> list[tuple[int, float, float, float, float]]: ...
 
     def fetch_history(
@@ -93,12 +94,12 @@ async def ensure_crypto_chart_history(
     candles_raw = await asyncio.to_thread(host.quote_provider.fetch_recent_ohlc, symbol, timeframe, required)
     if candles_raw:
         fresh = _to_candle_deque(candles_raw, candle_cls=candle_cls, maxlen=cfg.candle_buffer_max)
-        if timeframe == "15m":
+        if timeframe == TIMEFRAME_15M:
             host.candles[symbol] = fresh
         else:
             host.crypto_candles_by_tf[timeframe][symbol] = fresh
 
-    if timeframe == "15m":
+    if timeframe == TIMEFRAME_15M:
         closes = await asyncio.to_thread(
             host.quote_provider.fetch_recent_closes,
             symbol,
@@ -117,7 +118,7 @@ async def ensure_crypto_chart_history(
             await asyncio.to_thread(
                 save_symbol_history_cache,
                 symbol,
-                "crypto",
+                SYMBOL_TYPE_CRYPTO,
                 closes=closes[-cfg.chart_history_points :],
                 candles=candles_for_cache,
             )
@@ -149,12 +150,12 @@ async def ensure_stock_chart_history(
     )
     if candles_raw:
         fresh = _to_candle_deque(candles_raw, candle_cls=candle_cls, maxlen=cfg.candle_buffer_max)
-        if timeframe == "15m":
+        if timeframe == TIMEFRAME_15M:
             host.stock_candles[symbol] = fresh
         else:
             host.stock_candles_by_tf[timeframe][symbol] = fresh
 
-    if timeframe == "15m":
+    if timeframe == TIMEFRAME_15M:
         closes, _ = await asyncio.to_thread(
             host.stock_provider.fetch_history,
             symbol,
@@ -174,7 +175,7 @@ async def ensure_stock_chart_history(
             await asyncio.to_thread(
                 save_symbol_history_cache,
                 symbol,
-                "stock",
+                SYMBOL_TYPE_STOCK,
                 closes=closes[-cfg.chart_history_points :],
                 candles=candles_for_cache,
             )

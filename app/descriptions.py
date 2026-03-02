@@ -8,6 +8,8 @@ from urllib.request import Request, urlopen
 
 import yfinance as yf
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK
+
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search?q={query}"
 COINGECKO_LIST_URL = "https://api.coingecko.com/api/v3/coins/list"
 COINGECKO_COIN_URL = (
@@ -113,17 +115,17 @@ def fetch_crypto_profile(symbol: str) -> tuple[str, str]:
 
 def fetch_symbol_description(symbol: str, symbol_type: str) -> str:
     st = (symbol_type or "").strip().lower()
-    if st == "stock":
+    if st == SYMBOL_TYPE_STOCK:
         return fetch_stock_profile(symbol)[0]
-    if st == "crypto":
+    if st == SYMBOL_TYPE_CRYPTO:
         return fetch_crypto_profile(symbol)[0]
     return ""
 
 
 def fetch_symbol_profile(symbol: str, symbol_type: str) -> tuple[str, str]:
     st = (symbol_type or "").strip().lower()
-    if st == "stock":
+    if st == SYMBOL_TYPE_STOCK:
         return fetch_stock_profile(symbol)
-    if st == "crypto":
+    if st == SYMBOL_TYPE_CRYPTO:
         return fetch_crypto_profile(symbol)
     return "", ""

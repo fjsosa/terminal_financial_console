@@ -4,6 +4,21 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
+from .constants import (
+    CMD_ADD,
+    CMD_C,
+    CMD_CALENDAR,
+    CMD_DEL,
+    CMD_EDIT,
+    CMD_HELP,
+    CMD_MV,
+    CMD_N,
+    CMD_Q,
+    CMD_R,
+    SYMBOL_TYPE_CRYPTO,
+    SYMBOL_TYPE_STOCK,
+)
+
 
 @dataclass(slots=True)
 class CompletionResult:
@@ -59,21 +74,21 @@ def command_slot_candidates(
     market_groups: list[dict[str, Any]],
     main_group_items: list[tuple[str, list[tuple[str, str]]]],
 ) -> list[str]:
-    commands = ["q", "r", "n", "c", "calendar", "?", "add", "del", "mv", "edit"]
+    commands = [CMD_Q, CMD_R, CMD_N, CMD_C, CMD_CALENDAR, CMD_HELP, CMD_ADD, CMD_DEL, CMD_MV, CMD_EDIT]
     if not committed:
         return commands
     cmd = committed[0].lower()
     target_index = len(committed)
-    if cmd == "c" and target_index == 1:
-        return ["calendar"]
-    if cmd in {"del", "mv", "edit"} and target_index == 1:
+    if cmd == CMD_C and target_index == 1:
+        return [CMD_CALENDAR]
+    if cmd in {CMD_DEL, CMD_MV, CMD_EDIT} and target_index == 1:
         return all_configured_symbols(main_group_items)
-    if cmd == "add" and target_index == 2:
-        return ["crypto", "stock"]
-    if cmd in {"add", "mv"} and target_index == 2 + (1 if cmd == "add" else 0):
+    if cmd == CMD_ADD and target_index == 2:
+        return [SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK]
+    if cmd in {CMD_ADD, CMD_MV} and target_index == 2 + (1 if cmd == CMD_ADD else 0):
         groups = [quote_token(str(g.get("name") or "").strip()) for g in market_groups]
         return [g for g in groups if g]
-    if cmd == "edit" and target_index >= 2:
+    if cmd == CMD_EDIT and target_index >= 2:
         return ["group=", "type=", "name="]
     return []
 

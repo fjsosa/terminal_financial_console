@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK, SYMBOL_TYPES
+
 
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search?q={query}"
 COINGECKO_LIST_URL = "https://api.coingecko.com/api/v3/coins/list"
@@ -146,16 +148,16 @@ def resolve_symbol_names(
             symbol = str(item.get("symbol") or "").upper()
             symbol_type = str(item.get("type") or "").lower()
             name = str(item.get("name") or "").strip()
-            if not symbol or symbol_type not in {"stock", "crypto"}:
+            if not symbol or symbol_type not in SYMBOL_TYPES:
                 continue
-            if symbol_type == "stock":
+            if symbol_type == SYMBOL_TYPE_STOCK:
                 stats["stocks_total"] += 1
             else:
                 stats["crypto_total"] += 1
             if name:
                 resolved_map[(symbol, symbol_type)] = name
                 continue
-            if symbol_type == "stock":
+            if symbol_type == SYMBOL_TYPE_STOCK:
                 stock_missing.append(symbol)
                 stats["stocks_missing_name"] += 1
             else:
@@ -185,16 +187,16 @@ def resolve_symbol_names(
                     continue
                 symbol = str(item.get("symbol") or "").upper()
                 symbol_type = str(item.get("type") or "").lower()
-                if not symbol or symbol_type not in {"stock", "crypto"}:
+                if not symbol or symbol_type not in SYMBOL_TYPES:
                     continue
                 name = str(item.get("name") or "").strip()
                 if not name:
-                    if symbol_type == "stock":
+                    if symbol_type == SYMBOL_TYPE_STOCK:
                         name = stock_names.get(symbol, "")
                     else:
                         name = crypto_names.get(symbol, "")
                 if not name:
-                    name = _crypto_base(symbol).title() if symbol_type == "crypto" else symbol
+                    name = _crypto_base(symbol).title() if symbol_type == SYMBOL_TYPE_CRYPTO else symbol
                 resolved_map[(symbol, symbol_type)] = name
                 enriched_item = {
                     "symbol": symbol,
@@ -246,7 +248,7 @@ def update_config_group_names(
                 symbol = str(item.get("symbol") or "").upper()
                 symbol_type = str(item.get("type") or "").lower()
                 symbol_name = str(item.get("name") or "").strip()
-                if symbol and symbol_type in {"stock", "crypto"} and symbol_name:
+                if symbol and symbol_type in SYMBOL_TYPES and symbol_name:
                     lookup[(symbol, symbol_type)] = symbol_name
         for group in list(indicator_groups or []):
             items = group.get("symbols")
@@ -258,7 +260,7 @@ def update_config_group_names(
                 symbol = str(item.get("symbol") or "").upper()
                 symbol_type = str(item.get("type") or "").lower()
                 symbol_name = str(item.get("name") or "").strip()
-                if symbol and symbol_type in {"stock", "crypto"} and symbol_name:
+                if symbol and symbol_type in SYMBOL_TYPES and symbol_name:
                     lookup[(symbol, symbol_type)] = symbol_name
 
         changed = False
@@ -273,7 +275,7 @@ def update_config_group_names(
                     continue
                 symbol = str(item.get("symbol") or "").upper()
                 symbol_type = str(item.get("type") or "").lower()
-                if not symbol or symbol_type not in {"stock", "crypto"}:
+                if not symbol or symbol_type not in SYMBOL_TYPES:
                     continue
                 wanted = lookup.get((symbol, symbol_type))
                 if not wanted:

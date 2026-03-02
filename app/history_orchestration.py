@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable, Protocol, TypeVar
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK
+
 T = TypeVar("T")
 
 
@@ -32,8 +34,8 @@ class HistoryHost(Protocol):
 
 
 def current_visible_symbols(main_visible_items: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
-    visible_crypto = [s for s, t in main_visible_items if t == "crypto"]
-    visible_stock = [s for s, t in main_visible_items if t == "stock"]
+    visible_crypto = [s for s, t in main_visible_items if t == SYMBOL_TYPE_CRYPTO]
+    visible_stock = [s for s, t in main_visible_items if t == SYMBOL_TYPE_STOCK]
     return visible_crypto, visible_stock
 
 
@@ -57,7 +59,7 @@ async def preload_visible_group_history(
 
     cache_hits = 0
     for symbol in visible_crypto:
-        cached = load_symbol_history_cache_fn(symbol, "crypto", cache_ttl_seconds)
+        cached = load_symbol_history_cache_fn(symbol, SYMBOL_TYPE_CRYPTO, cache_ttl_seconds)
         if not cached:
             continue
         closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
@@ -68,7 +70,7 @@ async def preload_visible_group_history(
         host._seed_symbol_history(symbol, closes[-initial_history_points:], candles[-initial_candle_limit:])
         cache_hits += 1
     for symbol in visible_stock:
-        cached = load_symbol_history_cache_fn(symbol, "stock", cache_ttl_seconds)
+        cached = load_symbol_history_cache_fn(symbol, SYMBOL_TYPE_STOCK, cache_ttl_seconds)
         if not cached:
             continue
         closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
@@ -92,7 +94,7 @@ async def preload_visible_group_history(
                 await run_io(
                     save_symbol_history_cache_fn,
                     symbol,
-                    "crypto",
+                    SYMBOL_TYPE_CRYPTO,
                     closes=closes,
                     candles=candles,
                 )
@@ -115,7 +117,7 @@ async def preload_visible_group_history(
                 await run_io(
                     save_symbol_history_cache_fn,
                     symbol,
-                    "stock",
+                    SYMBOL_TYPE_STOCK,
                     closes=closes,
                     candles=candles,
                 )
@@ -158,7 +160,7 @@ async def load_remaining_history_in_background(
     sem = asyncio.Semaphore(startup_io_concurrency)
 
     async def fill_crypto(symbol: str) -> None:
-        cached = load_symbol_history_cache_fn(symbol, "crypto", cache_ttl_seconds)
+        cached = load_symbol_history_cache_fn(symbol, SYMBOL_TYPE_CRYPTO, cache_ttl_seconds)
         if cached:
             closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
             candles = [
@@ -175,7 +177,7 @@ async def load_remaining_history_in_background(
                 await run_io(
                     save_symbol_history_cache_fn,
                     symbol,
-                    "crypto",
+                    SYMBOL_TYPE_CRYPTO,
                     closes=closes,
                     candles=candles,
                 )
@@ -183,7 +185,7 @@ async def load_remaining_history_in_background(
                 return
 
     async def fill_stock(symbol: str) -> None:
-        cached = load_symbol_history_cache_fn(symbol, "stock", cache_ttl_seconds)
+        cached = load_symbol_history_cache_fn(symbol, SYMBOL_TYPE_STOCK, cache_ttl_seconds)
         if cached:
             closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
             candles = [
@@ -204,7 +206,7 @@ async def load_remaining_history_in_background(
                 await run_io(
                     save_symbol_history_cache_fn,
                     symbol,
-                    "stock",
+                    SYMBOL_TYPE_STOCK,
                     closes=closes,
                     candles=candles,
                 )

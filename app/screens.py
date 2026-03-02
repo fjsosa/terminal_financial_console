@@ -12,9 +12,8 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from .constants import TIMEFRAMES
 from .i18n import tr
-
-TIMEFRAMES = ("15m", "1h", "1d", "1w", "1mo")
 
 
 class ChartModal(ModalScreen[None]):
@@ -61,7 +60,7 @@ class ChartModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chart_scroll"):
-            yield Static("Loading chart...", id="chart_box")
+            yield Static(tr("Loading chart..."), id="chart_box")
 
     async def on_mount(self) -> None:
         self._refresh_chart()

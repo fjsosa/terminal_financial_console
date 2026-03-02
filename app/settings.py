@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .constants import SYMBOL_TYPE_CRYPTO, SYMBOL_TYPE_STOCK
 from .config_loader import load_app_config
 
 
@@ -39,12 +40,12 @@ def _extract_symbols_from_groups(groups: list[dict[str, Any]]) -> tuple[list[str
             symbol_type = str(item.get("type") or "").strip().lower()
             if not symbol:
                 continue
-            if symbol_type == "crypto":
+            if symbol_type == SYMBOL_TYPE_CRYPTO:
                 if symbol not in seen_crypto:
                     seen_crypto.add(symbol)
                     crypto_symbols.append(symbol)
                 continue
-            if symbol_type == "stock":
+            if symbol_type == SYMBOL_TYPE_STOCK:
                 if symbol not in seen_stock:
                     seen_stock.add(symbol)
                     stock_symbols.append(symbol)

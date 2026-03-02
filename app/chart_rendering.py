@@ -6,6 +6,12 @@ from typing import Any, Callable, Protocol
 
 from rich.text import Text
 
+from .constants import (
+    SYMBOL_TYPE_CRYPTO,
+    SYMBOL_TYPE_STOCK,
+    TIMEFRAME_15M,
+    TIMEFRAMES,
+)
 from .i18n import tr
 
 try:
@@ -32,16 +38,16 @@ class ChartRenderHost(Protocol):
 def build_chart_text(
     host: ChartRenderHost,
     state: Any,
-    timeframe: str = "15m",
+    timeframe: str = TIMEFRAME_15M,
     target_candles: int = 96,
 ) -> Text:
     candles = list(host._get_crypto_series(state.symbol, timeframe) or deque())
-    if timeframe != "15m" and not candles:
+    if timeframe != TIMEFRAME_15M and not candles:
         candles = host._resample_candles(list(host.candles.get(state.symbol, deque())), timeframe)
     return build_chart_from_series(
         host,
         symbol=state.symbol,
-        display_name=host.symbol_names.get((state.symbol, "crypto"), ""),
+        display_name=host.symbol_names.get((state.symbol, SYMBOL_TYPE_CRYPTO), ""),
         market_label="CRYPTO",
         price=state.price,
         change_percent=state.change_percent,
@@ -56,16 +62,16 @@ def build_chart_text(
 def build_stock_chart_text(
     host: ChartRenderHost,
     state: Any,
-    timeframe: str = "15m",
+    timeframe: str = TIMEFRAME_15M,
     target_candles: int = 96,
 ) -> Text:
     candles = list(host._get_stock_series(state.symbol, timeframe) or deque())
-    if timeframe != "15m" and not candles:
+    if timeframe != TIMEFRAME_15M and not candles:
         candles = host._resample_candles(list(host.stock_candles.get(state.symbol, deque())), timeframe)
     return build_chart_from_series(
         host,
         symbol=state.symbol,
-        display_name=host.symbol_names.get((state.symbol, "stock"), ""),
+        display_name=host.symbol_names.get((state.symbol, SYMBOL_TYPE_STOCK), ""),
         market_label="STOCK",
         price=state.price,
         change_percent=state.change_percent,
@@ -91,7 +97,7 @@ def build_chart_from_series(
     timeframe: str,
     target_candles: int,
 ) -> Text:
-    symbol_type = "stock" if market_label == "STOCK" else "crypto"
+    symbol_type = SYMBOL_TYPE_STOCK if market_label == "STOCK" else SYMBOL_TYPE_CRYPTO
     color = host._trend_color(change_percent >= 0, symbol_type=symbol_type)
     palette = host._ui_palette()
     visible_candles = max(24, target_candles)
@@ -109,7 +115,7 @@ def build_chart_from_series(
         style=f"bold {color}",
     )
     chart.append(
-        f"timeframe: {timeframe.upper()}   toggle: [t] 15m/1h/1d/1w/1mo   close: [Esc]/[Enter]/[q]\n\n",
+        f"timeframe: {timeframe.upper()}   toggle: [t] {'/'.join(TIMEFRAMES)}   close: [Esc]/[Enter]/[q]\n\n",
         style=palette["muted"],
     )
     chart.append(f"{tr('Category')}: ", style=f"bold {palette['brand']}")

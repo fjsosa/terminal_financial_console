@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .constants import (
+    ID_ALERTS_TABLE,
+    ID_COMMAND_INPUT,
+    ID_EVENTS,
+    ID_INDICATORS_TABLE,
+    ID_MAIN_TABLE,
+    ID_NEWS_HEADER,
+    ID_NEWS_TABLE,
+)
+
 
 def configure_tables(
     host: Any,
@@ -11,7 +21,7 @@ def configure_tables(
     max_events: int,
     tr_fn: Callable[[str], str],
 ) -> None:
-    main_table = host.query_one("#crypto_quotes")
+    main_table = host.query_one(ID_MAIN_TABLE)
     main_table.cursor_type = "row"
     main_table.zebra_stripes = True
     col_symbol = main_table.add_column(tr_fn("Ticker"), width=25)
@@ -35,7 +45,7 @@ def configure_tables(
         host.main_row_keys.append(row_key)
     host._update_main_group_panel()
 
-    alerts_table = host.query_one("#stock_quotes")
+    alerts_table = host.query_one(ID_ALERTS_TABLE)
     alerts_table.cursor_type = "row"
     alerts_table.zebra_stripes = True
     a_symbol = alerts_table.add_column(tr_fn("Ticker"), width=25)
@@ -56,7 +66,7 @@ def configure_tables(
         host.alerts_row_keys.append(row_key)
     host._update_alerts_panel()
 
-    indicators_table = host.query_one("#indicators_table")
+    indicators_table = host.query_one(ID_INDICATORS_TABLE)
     indicators_table.cursor_type = "row"
     indicators_table.zebra_stripes = True
     i_symbol = indicators_table.add_column(tr_fn("Indicator"), width=30)
@@ -74,7 +84,7 @@ def configure_tables(
         host.indicator_row_keys.append(row_key)
     host._update_indicators_panel()
 
-    news_table = host.query_one("#news_table")
+    news_table = host.query_one(ID_NEWS_TABLE)
     news_table.cursor_type = "row"
     news_table.zebra_stripes = True
     news_table.show_horizontal_scrollbar = False
@@ -89,7 +99,7 @@ def configure_tables(
         )
         host.news_row_keys.append(row_key)
 
-    events_log = host.query_one("#events")
+    events_log = host.query_one(ID_EVENTS)
     events_log.max_lines = max_events
 
 
@@ -105,8 +115,10 @@ def initialize_mount_state(
     host._log("[#6f8aa8]NAMES[/] resolving symbol names in background...")
     host.name_resolve_task = create_task_fn(host._resolve_names_background())
     palette = host._ui_palette()
-    host.query_one("#news_header").update(f"[{palette['accent']}]NEWS // finviz.com (refresh 10m)[/]")
-    command_input = host.query_one("#command_input")
+    host.query_one(ID_NEWS_HEADER).update(
+        f"[{palette['accent']}]{tr_fn('NEWS // finviz.com (refresh {minutes}m)').format(minutes=10)}[/]"
+    )
+    command_input = host.query_one(ID_COMMAND_INPUT)
     command_input.value = ""
     command_input.display = False
     host._render_status_line()

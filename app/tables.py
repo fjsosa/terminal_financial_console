@@ -6,6 +6,15 @@ from typing import Any, Protocol
 from rich.text import Text
 from textual.widgets import DataTable, Static
 
+from .constants import (
+    ID_ALERTS_TABLE,
+    ID_INDICATORS_TABLE,
+    ID_MAIN_TABLE,
+    ID_NEWS_HEADER,
+    ID_NEWS_TABLE,
+    SYMBOL_TYPE_CRYPTO,
+    SYMBOL_TYPE_STOCK,
+)
 from .i18n import tr
 
 
@@ -52,7 +61,7 @@ class TableHost(Protocol):
 
 
 def update_main_group_panel(host: TableHost) -> None:
-    table = host.query_one("#crypto_quotes", DataTable)
+    table = host.query_one(ID_MAIN_TABLE, DataTable)
     if not host.main_group_items:
         host.main_visible_items = []
         host.main_row_item_by_index.clear()
@@ -101,7 +110,7 @@ def update_main_group_panel(host: TableHost) -> None:
 
 
 def update_indicators_panel(host: TableHost) -> None:
-    table = host.query_one("#indicators_table", DataTable)
+    table = host.query_one(ID_INDICATORS_TABLE, DataTable)
     if not host.indicator_group_items:
         host.indicator_visible_items = []
         host.indicator_row_item_by_index.clear()
@@ -145,7 +154,7 @@ def update_indicators_panel(host: TableHost) -> None:
         if state is None:
             state = host._new_stock_state(symbol)
             host.indicator_data[symbol] = state
-        color = host._trend_color(state.change_percent >= 0, symbol_type="stock")
+        color = host._trend_color(state.change_percent >= 0, symbol_type=SYMBOL_TYPE_STOCK)
         table.update_cell(
             row_key,
             host.indicator_col_keys["symbol"],
@@ -164,16 +173,16 @@ def update_indicators_panel(host: TableHost) -> None:
 
 
 def update_alerts_panel(host: TableHost, alerts_table_size: int) -> None:
-    table = host.query_one("#stock_quotes", DataTable)
+    table = host.query_one(ID_ALERTS_TABLE, DataTable)
     entries: list[tuple[str, str, float, float, float]] = []
     for symbol, state in host.symbol_data.items():
         if state.price <= 0 and state.last_update_ms <= 0:
             continue
-        entries.append((symbol, "crypto", state.change_percent, state.price, state.volume))
+        entries.append((symbol, SYMBOL_TYPE_CRYPTO, state.change_percent, state.price, state.volume))
     for symbol, state in host.stock_data.items():
         if state.price <= 0 and state.last_update_ms <= 0:
             continue
-        entries.append((symbol, "stock", state.change_percent, state.price, state.volume))
+        entries.append((symbol, SYMBOL_TYPE_STOCK, state.change_percent, state.price, state.volume))
 
     entries.sort(key=lambda item: item[2], reverse=True)
     top = entries[:alerts_table_size]
@@ -196,7 +205,7 @@ def update_alerts_panel(host: TableHost, alerts_table_size: int) -> None:
         symbol, symbol_type, change_pct, price, volume = top[i]
         host.alerts_row_item_by_index[i] = (symbol, symbol_type)
         color = host._trend_color(change_pct >= 0, symbol_type=symbol_type)
-        type_label = "CRT" if symbol_type == "crypto" else "STK"
+        type_label = "CRT" if symbol_type == SYMBOL_TYPE_CRYPTO else "STK"
         table.update_cell(row_key, host.alerts_col_keys["symbol"], host._ticker_label(symbol, symbol_type))
         table.update_cell(row_key, host.alerts_col_keys["type"], type_label)
         table.update_cell(
@@ -213,11 +222,16 @@ def update_alerts_panel(host: TableHost, alerts_table_size: int) -> None:
 
 
 def update_news_panel(host: TableHost, news_group_size: int, news_refresh_seconds: int) -> None:
-    header = host.query_one("#news_header", Static)
-    table = host.query_one("#news_table", DataTable)
+    header = host.query_one(ID_NEWS_HEADER, Static)
+    table = host.query_one(ID_NEWS_TABLE, DataTable)
 
     if not host.news_groups:
-        header.update(Text("NEWS // finviz.com (refresh 10m)", style=host._ui_palette()["accent"]))
+        header.update(
+            Text(
+                tr("NEWS // finviz.com (refresh {minutes}m)").format(minutes=news_refresh_seconds // 60),
+                style=host._ui_palette()["accent"],
+            )
+        )
         host.news_row_links.clear()
         for i in range(news_group_size):
             row_key = host.news_row_keys[i]
@@ -240,7 +254,8 @@ def update_news_panel(host: TableHost, news_group_size: int, news_refresh_second
     header_txt.append("finviz.com", style=palette["accent"])
     header_txt.append(f" (refresh {news_refresh_seconds // 60}m) ", style=palette["muted"])
     header_txt.append(
-        f"[group {host.news_group_index + 1}/{len(host.news_groups)} | updated {host.news_last_update}]",
+        f"[{tr('group')} {host.news_group_index + 1}/{len(host.news_groups)} | "
+        f"{tr('updated')} {host.news_last_update}]",
         style=palette["muted"],
     )
     header.update(header_txt)
@@ -251,7 +266,7 @@ def update_news_panel(host: TableHost, news_group_size: int, news_refresh_second
         if i < len(items):
             item = items[i]
             host.news_row_links[i] = item.url
-            source = (item.source or "source").strip()
+            source = (item.source or tr("source")).strip()
             age = (item.age or "-").strip()
             table.update_cell(
                 row_key,
