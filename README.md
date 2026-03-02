@@ -66,6 +66,22 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Tests
+
+La suite de tests unitarios cubre los modulos refactorizados (`commands`, `config_repository`, `formatters`, `command_completion`).
+
+Ejecutar todos los tests:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Ejecutar un archivo puntual:
+
+```bash
+python -m unittest tests/test_commands.py -v
+```
+
 ## Uso Multi-Instancia (2 mercados en paralelo)
 
 Puedes ejecutar la app en dos terminales distintas con configuraciones diferentes para monitorear mercados en paralelo.
