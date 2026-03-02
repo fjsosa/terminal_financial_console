@@ -175,6 +175,12 @@ from .history_orchestration import (
     preload_visible_group_history,
 )
 from .stream_orchestration import consume_feed, refresh_crypto_stream_for_visible_group
+from .startup_mount import (
+    configure_tables,
+    initialize_mount_state,
+    refresh_theme_panels,
+    schedule_mount_intervals,
+)
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
@@ -374,129 +380,30 @@ class NeonQuotesApp(App[None]):
         )
 
     async def on_mount(self) -> None:
-        main_table = self.query_one("#crypto_quotes", DataTable)
-        main_table.cursor_type = "row"
-        main_table.zebra_stripes = True
-        col_symbol = main_table.add_column(tr("Ticker"), width=25)
-        col_type = main_table.add_column(tr("Type"), width=4)
-        col_price = main_table.add_column(tr("Price"), width=13)
-        col_change = main_table.add_column("24h %", width=9)
-        col_volume = main_table.add_column(tr("Volume"), width=17)
-        col_spark = main_table.add_column(tr("Spark"))
-        self.main_col_keys = {
-            "symbol": col_symbol,
-            "type": col_type,
-            "price": col_price,
-            "change": col_change,
-            "volume": col_volume,
-            "spark": col_spark,
-        }
-        self.main_row_keys.clear()
-        main_rows = max(1, max((len(items) for _, items in self.main_group_items), default=1))
-        for i in range(main_rows):
-            row_key = main_table.add_row("-", "-", "-", "-", "-", "", key=f"main_{i}")
-            self.main_row_keys.append(row_key)
-        self._update_main_group_panel()
-
-        alerts_table = self.query_one("#stock_quotes", DataTable)
-        alerts_table.cursor_type = "row"
-        alerts_table.zebra_stripes = True
-        a_symbol = alerts_table.add_column(tr("Ticker"), width=25)
-        a_type = alerts_table.add_column(tr("Type"), width=4)
-        a_change = alerts_table.add_column("24h %", width=9)
-        a_price = alerts_table.add_column(tr("Price"), width=13)
-        a_volume = alerts_table.add_column(tr("Volume"), width=17)
-        self.alerts_col_keys = {
-            "symbol": a_symbol,
-            "type": a_type,
-            "change": a_change,
-            "price": a_price,
-            "volume": a_volume,
-        }
-        self.alerts_row_keys.clear()
-        for i in range(ALERTS_TABLE_SIZE):
-            row_key = alerts_table.add_row(
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                key=f"alert_{i}",
-            )
-            self.alerts_row_keys.append(row_key)
-        self._update_alerts_panel()
-
-        indicators_table = self.query_one("#indicators_table", DataTable)
-        indicators_table.cursor_type = "row"
-        indicators_table.zebra_stripes = True
-        i_symbol = indicators_table.add_column(tr("Indicator"), width=30)
-        i_change = indicators_table.add_column("24h %", width=9)
-        i_price = indicators_table.add_column(tr("Price"), width=13)
-        self.indicator_col_keys = {
-            "symbol": i_symbol,
-            "change": i_change,
-            "price": i_price,
-        }
-        self.indicator_row_keys.clear()
-        indicator_rows = max(1, max((len(items) for _, items in self.indicator_group_items), default=1))
-        for i in range(indicator_rows):
-            row_key = indicators_table.add_row("-", "-", "-", key=f"indicator_{i}")
-            self.indicator_row_keys.append(row_key)
-        self._update_indicators_panel()
-
-        news_table = self.query_one("#news_table", DataTable)
-        news_table.cursor_type = "row"
-        news_table.zebra_stripes = True
-        news_table.show_horizontal_scrollbar = False
-        n_title = news_table.add_column(tr("Headline"), width=82)
-        self.news_col_keys = {
-            "title": n_title,
-        }
-        self.news_row_keys.clear()
-        for i in range(NEWS_GROUP_SIZE):
-            row_key = news_table.add_row(
-                tr("Loading headlines...\nPlease wait\n"),
-                key=f"news_{i}",
-                height=3,
-            )
-            self.news_row_keys.append(row_key)
-
-        events_log = self.query_one("#events", RichLog)
-        events_log.max_lines = MAX_EVENTS
-        self._log(tr("Booting market stream..."))
-        self._load_cached_descriptions()
-        self._load_cached_symbol_names()
-        self._log("[#6f8aa8]NAMES[/] resolving symbol names in background...")
-        self.name_resolve_task = asyncio.create_task(self._resolve_names_background())
-        self.query_one("#news_header", Static).update(
-            Text("NEWS // finviz.com (refresh 10m)", style=self._ui_palette()["accent"])
+        configure_tables(
+            self,
+            alerts_table_size=ALERTS_TABLE_SIZE,
+            news_group_size=NEWS_GROUP_SIZE,
+            max_events=MAX_EVENTS,
+            tr_fn=tr,
         )
-        command_input = self.query_one("#command_input", Input)
-        command_input.value = ""
-        command_input.display = False
-        self._render_status_line()
+        initialize_mount_state(self, tr_fn=tr, create_task_fn=asyncio.create_task)
         self.watch(self.app, "theme", self._on_app_theme_changed, init=False)
 
-        self.set_interval(0.5, self._update_clock)
-        self.set_interval(0.15, self._animate_ticker)
-        self.set_interval(TICKER_MODE_SECONDS, self._rotate_ticker_mode)
-        self.set_interval(NEWS_REFRESH_SECONDS, self._schedule_news_refresh)
-        self.set_interval(CALENDAR_REFRESH_SECONDS, self._schedule_calendar_refresh)
-        self.set_interval(NEWS_GROUP_ROTATE_SECONDS, self._rotate_news_group)
-        self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_main_group)
-        self.set_interval(STOCK_GROUP_ROTATE_SECONDS, self._rotate_indicator_group)
-        self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_stock_refresh)
-        self.set_interval(STOCKS_REFRESH_SECONDS, self._schedule_indicator_refresh)
+        schedule_mount_intervals(
+            self,
+            ticker_mode_seconds=TICKER_MODE_SECONDS,
+            news_refresh_seconds=NEWS_REFRESH_SECONDS,
+            calendar_refresh_seconds=CALENDAR_REFRESH_SECONDS,
+            news_group_rotate_seconds=NEWS_GROUP_ROTATE_SECONDS,
+            stock_group_rotate_seconds=STOCK_GROUP_ROTATE_SECONDS,
+            stocks_refresh_seconds=STOCKS_REFRESH_SECONDS,
+        )
         self.startup_task = asyncio.create_task(self._startup_sequence())
 
     def _on_app_theme_changed(self, *_args: Any) -> None:
-        # Re-render news metadata colors when theme changes from command palette.
-        self._update_news_panel()
-        self._update_main_group_panel()
-        self._update_indicators_panel()
-        self._update_alerts_panel()
-        self._render_status_line()
-        self._update_clock()
+        # Re-render metadata colors when theme changes from command palette.
+        refresh_theme_panels(self)
 
     def _ui_palette(self) -> dict[str, str]:
         theme = self.app.current_theme
