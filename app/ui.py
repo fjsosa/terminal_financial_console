@@ -169,6 +169,12 @@ from .chart_controller import (
     open_chart_for_symbol,
     open_main_chart_for_row,
 )
+from .history_orchestration import (
+    current_visible_symbols,
+    load_remaining_history_in_background,
+    preload_visible_group_history,
+)
+from .stream_orchestration import consume_feed, refresh_crypto_stream_for_visible_group
 
 SPARKS = "▁▂▃▄▅▆▇█"
 FIFTEEN_MIN_MS = 15 * 60 * 1000
@@ -682,19 +688,7 @@ class NeonQuotesApp(App[None]):
         self.ticker_offset += 1
 
     async def _consume_feed(self) -> None:
-        self.status_text = "STREAMING"
-        self._log("[green]Connected to Binance stream[/]")
-        while True:
-            try:
-                async for quote in self.quote_provider.stream():
-                    self._apply_quote(quote)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self.status_text = "RECONNECTING"
-                self._log(f"[yellow]Stream warning:[/] {exc!r}")
-                await asyncio.sleep(2)
-                self.status_text = "STREAMING"
+        await consume_feed(self)
 
     def _schedule_news_refresh(self) -> None:
         schedule_news_refresh(self)
@@ -904,24 +898,7 @@ class NeonQuotesApp(App[None]):
         self._schedule_indicator_refresh()
 
     async def _refresh_crypto_stream_for_visible_group(self) -> None:
-        desired = [s for s, t in self.main_visible_items if t == "crypto"]
-        desired = [s.upper() for s in desired if s]
-        current = [s.upper() for s in self.quote_provider.symbols]
-        if desired == current and self.feed_task is not None:
-            return
-
-        if self.feed_task:
-            self.feed_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.feed_task
-            self.feed_task = None
-
-        if not desired:
-            self.status_text = "STOCKS ONLY"
-            return
-
-        self.quote_provider.set_symbols(desired)
-        self.feed_task = asyncio.create_task(self._consume_feed())
+        await refresh_crypto_stream_for_visible_group(self)
 
     def _update_main_group_panel(self) -> None:
         update_main_group_panel(self)
@@ -940,181 +917,31 @@ class NeonQuotesApp(App[None]):
         return state.change_percent if state is not None else -9999.0
 
     def _current_visible_symbols(self) -> tuple[list[str], list[str]]:
-        visible_crypto = [s for s, t in self.main_visible_items if t == "crypto"]
-        visible_stock = [s for s, t in self.main_visible_items if t == "stock"]
-        return visible_crypto, visible_stock
+        return current_visible_symbols(self.main_visible_items)
 
     async def _preload_visible_group_history(self) -> None:
-        visible_crypto, visible_stock = self._current_visible_symbols()
-        visible_crypto = visible_crypto or self.crypto_symbols[:10]
-        visible_stock = visible_stock or self.stock_symbols[:10]
-        total = len(visible_crypto) + len(visible_stock)
         if self.boot_modal:
-            self.boot_modal.set_total(max(1, total))
             self.boot_modal.set_phase(tr("Syncing crypto history"))
-
-        # 1) Instant load from cache when available.
-        cache_hits = 0
-        for symbol in visible_crypto:
-            cached = load_symbol_history_cache(symbol, "crypto", CACHE_TTL_SECONDS)
-            if not cached:
-                continue
-            closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
-            candles = [
-                (int(ts), float(o), float(h), float(l), float(c))
-                for ts, o, h, l, c in cached.get("candles", [])
-            ]
-            self._seed_symbol_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
-            cache_hits += 1
-        for symbol in visible_stock:
-            cached = load_symbol_history_cache(symbol, "stock", CACHE_TTL_SECONDS)
-            if not cached:
-                continue
-            closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
-            candles = [
-                (int(ts), float(o), float(h), float(l), float(c))
-                for ts, o, h, l, c in cached.get("candles", [])
-            ]
-            self._seed_stock_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
-            cache_hits += 1
-
-        if cache_hits:
-            self._log(f"[#2ec4b6]CACHE[/] loaded {cache_hits} symbol histories")
-
-        # 2) Remote refresh for visible symbols with concurrency limit.
-        sem = asyncio.Semaphore(STARTUP_IO_CONCURRENCY)
-
-        async def fetch_crypto(symbol: str) -> None:
-            async with sem:
-                try:
-                    closes = await asyncio.to_thread(
-                        self.quote_provider.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
-                    )
-                    candles = await asyncio.to_thread(
-                        self.quote_provider.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
-                    )
-                    self._seed_symbol_history(symbol, closes, candles)
-                    await asyncio.to_thread(
-                        save_symbol_history_cache,
-                        symbol,
-                        "crypto",
-                        closes=closes,
-                        candles=candles,
-                    )
-                except Exception as exc:
-                    self._log(f"[yellow]History warning {symbol}:[/] {exc!r}")
-                finally:
-                    if self.boot_modal:
-                        self.boot_modal.increment()
-
-        async def fetch_stock(symbol: str) -> None:
-            async with sem:
-                try:
-                    closes, candles = await asyncio.to_thread(
-                        self.stock_provider.fetch_history,
-                        symbol,
-                        INITIAL_HISTORY_POINTS,
-                        INITIAL_CANDLE_LIMIT,
-                    )
-                    self._seed_stock_history(symbol, closes, candles)
-                    await asyncio.to_thread(
-                        save_symbol_history_cache,
-                        symbol,
-                        "stock",
-                        closes=closes,
-                        candles=candles,
-                    )
-                except Exception as exc:
-                    self._log(f"[yellow]Stock history warning {symbol}:[/] {exc!r}")
-                finally:
-                    if self.boot_modal:
-                        self.boot_modal.increment()
-
-        tasks = [asyncio.create_task(fetch_crypto(s)) for s in visible_crypto]
-        tasks.extend(asyncio.create_task(fetch_stock(s)) for s in visible_stock)
-        if tasks:
-            await asyncio.gather(*tasks)
-        self._update_main_group_panel()
-        self._update_alerts_panel()
-        self._log("[#2ec4b6]HISTORY[/] visible group preload complete")
+        await preload_visible_group_history(
+            self,
+            cache_ttl_seconds=CACHE_TTL_SECONDS,
+            initial_history_points=INITIAL_HISTORY_POINTS,
+            initial_candle_limit=INITIAL_CANDLE_LIMIT,
+            startup_io_concurrency=STARTUP_IO_CONCURRENCY,
+            load_symbol_history_cache_fn=load_symbol_history_cache,
+            save_symbol_history_cache_fn=save_symbol_history_cache,
+        )
 
     async def _load_remaining_history_in_background(self) -> None:
-        # Lazy fill for symbols outside the visible window.
-        visible_crypto, visible_stock = self._current_visible_symbols()
-        remaining_crypto = [s for s in self.crypto_symbols if s not in set(visible_crypto)]
-        remaining_stock = [s for s in self.stock_symbols if s not in set(visible_stock)]
-        if not remaining_crypto and not remaining_stock:
-            return
-
-        self._log(
-            f"[#6f8aa8]HISTORY[/] lazy background load started "
-            f"(crypto={len(remaining_crypto)} stock={len(remaining_stock)})"
+        await load_remaining_history_in_background(
+            self,
+            cache_ttl_seconds=CACHE_TTL_SECONDS,
+            initial_history_points=INITIAL_HISTORY_POINTS,
+            initial_candle_limit=INITIAL_CANDLE_LIMIT,
+            startup_io_concurrency=STARTUP_IO_CONCURRENCY,
+            load_symbol_history_cache_fn=load_symbol_history_cache,
+            save_symbol_history_cache_fn=save_symbol_history_cache,
         )
-        sem = asyncio.Semaphore(STARTUP_IO_CONCURRENCY)
-
-        async def fill_crypto(symbol: str) -> None:
-            cached = load_symbol_history_cache(symbol, "crypto", CACHE_TTL_SECONDS)
-            if cached:
-                closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
-                candles = [
-                    (int(ts), float(o), float(h), float(l), float(c))
-                    for ts, o, h, l, c in cached.get("candles", [])
-                ]
-                self._seed_symbol_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
-                return
-            async with sem:
-                try:
-                    closes = await asyncio.to_thread(
-                        self.quote_provider.fetch_recent_closes, symbol, INITIAL_HISTORY_POINTS
-                    )
-                    candles = await asyncio.to_thread(
-                        self.quote_provider.fetch_recent_15m_ohlc, symbol, INITIAL_CANDLE_LIMIT
-                    )
-                    self._seed_symbol_history(symbol, closes, candles)
-                    await asyncio.to_thread(
-                        save_symbol_history_cache,
-                        symbol,
-                        "crypto",
-                        closes=closes,
-                        candles=candles,
-                    )
-                except Exception:
-                    return
-
-        async def fill_stock(symbol: str) -> None:
-            cached = load_symbol_history_cache(symbol, "stock", CACHE_TTL_SECONDS)
-            if cached:
-                closes = [(int(ts), float(px)) for ts, px in cached.get("closes", [])]
-                candles = [
-                    (int(ts), float(o), float(h), float(l), float(c))
-                    for ts, o, h, l, c in cached.get("candles", [])
-                ]
-                self._seed_stock_history(symbol, closes[-INITIAL_HISTORY_POINTS:], candles[-INITIAL_CANDLE_LIMIT:])
-                return
-            async with sem:
-                try:
-                    closes, candles = await asyncio.to_thread(
-                        self.stock_provider.fetch_history,
-                        symbol,
-                        INITIAL_HISTORY_POINTS,
-                        INITIAL_CANDLE_LIMIT,
-                    )
-                    self._seed_stock_history(symbol, closes, candles)
-                    await asyncio.to_thread(
-                        save_symbol_history_cache,
-                        symbol,
-                        "stock",
-                        closes=closes,
-                        candles=candles,
-                    )
-                except Exception:
-                    return
-
-        tasks = [asyncio.create_task(fill_crypto(s)) for s in remaining_crypto]
-        tasks.extend(asyncio.create_task(fill_stock(s)) for s in remaining_stock)
-        if tasks:
-            await asyncio.gather(*tasks)
-        self._log("[#6f8aa8]HISTORY[/] lazy background load completed")
 
     async def _show_boot_modal(self) -> None:
         self.boot_modal = BootModal()
